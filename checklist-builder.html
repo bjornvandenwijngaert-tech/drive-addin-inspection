@@ -9,6 +9,13 @@
   html, body { height: 100%; }
   body { font-family: 'Segoe UI', system-ui, sans-serif; }
   .geotab-header { background: #0047BB; }
+  /* Floating elevation */
+  .card-float { box-shadow: 0 1px 3px rgba(0,0,0,0.07), 0 4px 14px rgba(0,0,0,0.05); border-radius: 16px; background: white; }
+  .btn-primary-float {
+    background: #0047BB; color: white; box-shadow: 0 2px 8px rgba(0,71,187,0.28);
+    transition: box-shadow .15s, transform .15s;
+  }
+  .btn-primary-float:hover { box-shadow: 0 4px 14px rgba(0,71,187,0.38); transform: translateY(-1px); }
   .toggle { position:relative; width:44px; height:24px; display:inline-block; }
   .toggle input { opacity:0; width:0; height:0; }
   .slider { position:absolute; cursor:pointer; inset:0; background:#cbd5e1; border-radius:24px; transition:.25s; }
@@ -24,23 +31,109 @@
   .loading-pill { display:inline-flex; align-items:center; gap:6px; font-size:11px; color:#64748b; background:#f1f5f9; border-radius:20px; padding:3px 10px; }
 </style>
 </head>
-<body class="bg-slate-50 h-full flex flex-col">
+<body style="background:#eef2f7;" class="h-full flex flex-col">
 
 <!-- Header -->
-<header class="geotab-header text-white px-5 py-3 flex items-center gap-3 shadow-lg z-10">
-  <svg class="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
-  <span class="font-semibold text-base">Checklist Builder</span>
-  <span id="dbBadge" class="text-blue-300 text-xs bg-blue-900/40 px-2 py-0.5 rounded ml-1">demo_UK_smb_onboarding</span>
-  <button onclick="testAddInData()" class="ml-auto text-xs bg-yellow-400 hover:bg-yellow-300 text-yellow-900 font-semibold px-3 py-1 rounded">Test AddInData</button>
+<header style="background:white;padding:0 20px;height:56px;display:flex;align-items:center;gap:14px;position:relative;z-index:10;box-shadow:0 1px 0 #e2e8f0,0 2px 12px rgba(0,0,0,0.06);flex-shrink:0;">
+  <div style="width:32px;height:32px;background:#0047BB;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;box-shadow:0 2px 8px rgba(0,71,187,0.35);">
+    <svg style="width:18px;height:18px;" fill="none" stroke="white" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
+  </div>
+  <span style="font-size:15px;font-weight:700;color:#1e293b;">Checklist Builder</span>
+  <span style="font-size:10px;color:#cbd5e1;">v1.5</span>
+  <button id="driveBtn" onclick="openDriveSetup()" style="margin-left:auto;display:flex;align-items:center;gap:6px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:7px 14px;cursor:pointer;color:#64748b;font-size:12px;font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,0.06);">
+    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z"/></svg>
+    <span id="driveBtnLabel">Connect Storage</span>
+  </button>
+  <button id="conflictBtn" onclick="openConflictPanel()" class="ml-2 relative hidden">
+    <svg class="w-6 h-6" style="color:#f59e0b;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>
+    <span id="conflictCount" class="absolute -top-1 -right-1 bg-red-500 text-white text-xs font-bold rounded-full w-4 h-4 flex items-center justify-center"></span>
+  </button>
 </header>
+
+<!-- Google Drive Setup Modal -->
+<div id="driveModal" class="hidden fixed inset-0 z-50 flex items-center justify-center" style="background:rgba(0,0,0,0.5);" onclick="closeDriveSetup()">
+  <div onclick="event.stopPropagation()" class="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 flex flex-col overflow-hidden">
+
+    <!-- Modal header -->
+    <div class="flex items-center justify-between px-6 py-4 border-b border-slate-100">
+      <div>
+        <h2 class="font-semibold text-slate-800">Photo Storage</h2>
+        <p class="text-xs text-slate-400 mt-0.5">Connect Google Drive to store check-in photos permanently</p>
+      </div>
+      <button onclick="closeDriveSetup()" class="text-slate-400 hover:text-slate-600 text-xl leading-none">&times;</button>
+    </div>
+
+    <!-- Not connected state -->
+    <div id="driveStateDisconnected" class="px-6 py-6 space-y-5">
+      <div class="bg-amber-50 border border-amber-200 rounded-xl p-4 flex gap-3">
+        <svg class="w-5 h-5 text-amber-500 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>
+        <p class="text-sm text-amber-800">Photos are currently stored in MyGeotab and may be deleted after a few days. Connect Google Drive to store them permanently.</p>
+      </div>
+      <div class="space-y-2">
+        <p class="text-xs font-semibold text-slate-500 uppercase tracking-widest">What happens when you connect:</p>
+        <div class="flex items-start gap-2 text-sm text-slate-600"><span class="text-blue-500 font-bold mt-0.5">1.</span><span>A browser window will open asking you to sign in to Google</span></div>
+        <div class="flex items-start gap-2 text-sm text-slate-600"><span class="text-blue-500 font-bold mt-0.5">2.</span><span>You'll be asked to allow access to Google Drive</span></div>
+        <div class="flex items-start gap-2 text-sm text-slate-600"><span class="text-blue-500 font-bold mt-0.5">3.</span><span>All future check-in photos will be saved permanently to that Drive account</span></div>
+      </div>
+      <button onclick="startGoogleAuth()" class="w-full py-3 rounded-xl font-semibold text-sm bg-blue-600 hover:bg-blue-700 text-white transition-colors flex items-center justify-center gap-2">
+        <svg class="w-4 h-4" viewBox="0 0 24 24"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#fff"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#fff"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#fff"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#fff"/></svg>
+        Sign in with Google
+      </button>
+      <p id="driveAuthError" class="text-xs text-red-500 text-center hidden"></p>
+    </div>
+
+    <!-- Connected state -->
+    <div id="driveStateConnected" class="hidden px-6 py-6 space-y-4">
+      <div class="bg-green-50 border border-green-200 rounded-xl p-4 flex gap-3 items-start">
+        <svg class="w-5 h-5 text-green-500 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+        <div>
+          <p class="text-sm font-semibold text-green-800">Google Drive connected</p>
+          <p id="driveConnectedEmail" class="text-xs text-green-600 mt-0.5"></p>
+        </div>
+      </div>
+      <div class="bg-slate-50 rounded-xl p-4 space-y-1">
+        <p class="text-xs font-semibold text-slate-500 uppercase tracking-widest">Photos are saved to:</p>
+        <p class="text-sm text-slate-700 font-mono">My Drive / Vehicle Check-In / ...</p>
+      </div>
+      <button onclick="disconnectGoogleDrive()" class="w-full py-2.5 rounded-xl text-sm font-medium border border-red-200 text-red-500 hover:bg-red-50 transition-colors">
+        Disconnect Google Drive
+      </button>
+    </div>
+
+  </div>
+</div>
+
+<!-- Conflict popover -->
+<div id="conflictPopover" class="hidden fixed z-50 bg-white border border-slate-200 rounded-xl shadow-xl p-3 w-56">
+  <div class="flex items-center justify-between mb-2">
+    <p class="text-xs font-semibold text-slate-500 uppercase tracking-widest">Assigned to:</p>
+    <button onclick="closeConflictPopover()" class="text-slate-400 hover:text-slate-600 text-lg leading-none">&times;</button>
+  </div>
+  <div id="conflictPopoverList" class="space-y-1"></div>
+</div>
+
+<!-- Conflict panel overlay -->
+<div id="conflictOverlay" class="fixed inset-0 z-50 hidden" onclick="closeConflictPanel()"></div>
+
+<!-- Conflict panel -->
+<div id="conflictPanel" class="fixed top-0 right-0 h-full w-3/4 max-w-sm bg-white shadow-2xl z-50 flex flex-col translate-x-full transition-transform duration-300">
+  <div class="flex items-center justify-between px-5 py-4 border-b border-slate-100 bg-slate-50">
+    <div>
+      <h2 class="font-semibold text-slate-800">Assignment Conflicts</h2>
+      <p class="text-xs text-slate-400 mt-0.5">Tap an entry to resolve</p>
+    </div>
+    <button onclick="closeConflictPanel()" class="text-slate-400 hover:text-slate-600 text-xl leading-none">&times;</button>
+  </div>
+  <div id="conflictList" class="flex-1 overflow-y-auto p-4 space-y-4"></div>
+</div>
 
 <div id="testOutput" class="hidden bg-slate-900 text-green-300 font-mono text-xs p-4 overflow-y-auto max-h-64 whitespace-pre-wrap border-b border-slate-700"></div>
 
 <div class="flex flex-1 overflow-hidden min-h-0">
   <!-- Sidebar -->
-  <aside class="w-72 bg-white border-r border-slate-200 flex flex-col shrink-0">
+  <aside class="w-72 flex flex-col shrink-0" style="background:white;border-right:1px solid #e2e8f0;box-shadow:2px 0 8px rgba(0,0,0,0.04);">
     <div class="p-3 border-b border-slate-100">
-      <button onclick="newChecklist()" class="w-full bg-blue-600 hover:bg-blue-700 text-white rounded-lg py-2 text-sm font-medium flex items-center justify-center gap-1.5 transition-colors">
+      <button onclick="newChecklist()" class="w-full text-white rounded-lg py-2 text-sm font-medium flex items-center justify-center gap-1.5 transition-colors btn-primary-float" style="background:#0047BB;border:none;">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4"/></svg>
         New Checklist
       </button>
@@ -49,20 +142,21 @@
   </aside>
 
   <!-- Editor -->
-  <main class="flex-1 overflow-y-auto p-6 space-y-5">
+  <main class="flex-1 overflow-y-auto p-6 space-y-5" style="background:#eef2f7;">
     <div class="flex items-start justify-between gap-4">
       <input id="clName" type="text" placeholder="Checklist name…"
         class="text-2xl font-bold text-slate-800 bg-transparent border-b-2 border-transparent focus:border-blue-500 focus:outline-none flex-1 pb-0.5 placeholder:text-slate-300"
         oninput="renderApiPreview()">
       <div class="flex gap-2 pt-1">
+        <button onclick="duplicateChecklist()" class="text-sm text-slate-500 hover:bg-slate-100 px-3 py-1.5 rounded-lg transition-colors" title="Copy this checklist to reuse for another vehicle">Duplicate</button>
         <button onclick="deleteChecklist()" class="text-sm text-red-500 hover:bg-red-50 px-3 py-1.5 rounded-lg transition-colors">Delete</button>
-        <button onclick="saveChecklist()" class="text-sm bg-blue-600 hover:bg-blue-700 text-white px-4 py-1.5 rounded-lg font-medium transition-colors">Save</button>
+        <button onclick="saveChecklist()" class="text-sm text-white px-4 py-1.5 rounded-lg font-medium btn-primary-float" style="background:#0047BB;border:none;">Save</button>
       </div>
     </div>
 
     <div class="grid grid-cols-2 gap-4">
       <!-- Assign To — plain buttons, no radio/peer hack -->
-      <div class="bg-white border border-slate-200 rounded-xl p-4">
+      <div class="rounded-xl p-4" style="background:white;box-shadow:0 1px 3px rgba(0,0,0,0.07),0 4px 14px rgba(0,0,0,0.05);">
         <p class="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-3">Assign Checklist To</p>
         <div class="grid grid-cols-2 gap-2">
           <button id="btn-driver" class="assign-btn active" onclick="setAssignType('driver')">
@@ -79,7 +173,7 @@
       </div>
 
       <!-- Assignment targets -->
-      <div class="bg-white border border-slate-200 rounded-xl p-4">
+      <div class="rounded-xl p-4" style="background:white;box-shadow:0 1px 3px rgba(0,0,0,0.07),0 4px 14px rgba(0,0,0,0.05);">
         <div class="flex items-center justify-between mb-2">
           <p id="assignLabel" class="text-xs font-semibold text-slate-500 uppercase tracking-widest">Select Drivers</p>
           <div class="flex items-center gap-2">
@@ -93,24 +187,40 @@
           </div>
         </div>
         <div id="groupChips" class="flex flex-wrap gap-1 mb-2"></div>
+        <div class="flex gap-2 mb-2">
+          <button onclick="selectAllVisible()" class="text-xs text-blue-600 hover:text-blue-800 font-semibold px-2 py-1 rounded hover:bg-blue-50 transition-colors">Select all</button>
+          <button onclick="clearAllVisible()" class="text-xs text-slate-400 hover:text-slate-600 font-semibold px-2 py-1 rounded hover:bg-slate-100 transition-colors">Clear all</button>
+        </div>
         <div id="assignList" class="space-y-1 max-h-44 overflow-y-auto"></div>
       </div>
     </div>
 
     <!-- Options -->
-    <div class="bg-white border border-slate-200 rounded-xl p-4 flex items-center justify-between">
-      <div>
-        <p class="text-sm font-semibold text-slate-700">Require end-of-check photos</p>
-        <p class="text-xs text-slate-400 mt-0.5">Driver must capture ≥ 1 vehicle photo before submitting</p>
+    <div class="rounded-xl p-4" style="background:white;box-shadow:0 1px 3px rgba(0,0,0,0.07),0 4px 14px rgba(0,0,0,0.05);">
+      <div class="flex items-center justify-between mb-4">
+        <div>
+          <p class="text-sm font-semibold text-slate-700">Require end-of-check photos</p>
+          <p class="text-xs text-slate-400 mt-0.5">User must take 1 picture per side of vehicle before submitting</p>
+        </div>
+        <label class="toggle ml-4">
+          <input type="checkbox" id="reqPhotos" checked>
+          <span class="slider"></span>
+        </label>
       </div>
-      <label class="toggle ml-4">
-        <input type="checkbox" id="reqPhotos" checked>
-        <span class="slider"></span>
-      </label>
+      <div class="border-t border-slate-100 pt-4">
+        <p class="text-sm font-semibold text-slate-700 mb-2">Trip type</p>
+        <div class="flex gap-2">
+          <button id="tripBtn-na" onclick="setTripType('na')" class="flex-1 py-2 rounded-lg text-xs font-semibold border transition-all border-blue-500 bg-blue-600 text-white">Not applicable</button>
+          <button id="tripBtn-pre" onclick="setTripType('pre')" class="flex-1 py-2 rounded-lg text-xs font-semibold border transition-all border-slate-200 bg-white text-slate-500">Pre-trip</button>
+          <button id="tripBtn-post" onclick="setTripType('post')" class="flex-1 py-2 rounded-lg text-xs font-semibold border transition-all border-slate-200 bg-white text-slate-500">Post-trip</button>
+          <button id="tripBtn-any" onclick="setTripType('any')" class="flex-1 py-2 rounded-lg text-xs font-semibold border transition-all border-slate-200 bg-white text-slate-500">Driver selects</button>
+        </div>
+        <p class="text-xs text-slate-400 mt-2">"Not applicable" hides pre/post entirely — for fleets where the distinction doesn't matter. "Driver selects" asks the driver to tag each check as pre- or post-trip — one checklist covers both.</p>
+      </div>
     </div>
 
     <!-- Items -->
-    <div class="bg-white border border-slate-200 rounded-xl p-4">
+    <div class="rounded-xl p-4" style="background:white;box-shadow:0 2px 6px rgba(0,0,0,0.07),0 8px 24px rgba(0,0,0,0.05);">
       <div class="flex items-center justify-between mb-3">
         <p class="text-xs font-semibold text-slate-500 uppercase tracking-widest">Checklist Items</p>
         <span id="itemCount" class="text-xs text-slate-400"></span>
@@ -136,6 +246,11 @@
       <button onclick="closeAddItemModal()" class="text-slate-400 hover:text-slate-600 text-xl leading-none">&times;</button>
     </div>
 
+    <div class="px-5 pt-3 shrink-0 flex gap-2">
+      <button id="tab-browse" onclick="setModalTab('browse')">All items</button>
+      <button id="tab-fav" onclick="setModalTab('fav')">&#9733; Favourites</button>
+    </div>
+
     <div class="flex-1 overflow-y-auto px-5 py-4 space-y-5" id="presetList">
       <!-- Rendered by JS -->
     </div>
@@ -153,6 +268,8 @@
             <option value="number">Number</option>
             <option value="text">Text</option>
           </select>
+          <button id="saveCustomToggle" onclick="toggleSaveCustom()" title="Also save this custom item to My Custom Checks for reuse"
+                  style="border:1.5px solid #e2e8f0;border-radius:8px;padding:0 12px;font-size:12px;font-weight:700;color:#64748b;background:white;cursor:pointer;white-space:nowrap;">&#9734; Save</button>
         </div>
       </div>
       <button onclick="addSelectedItems()" class="w-full bg-blue-600 hover:bg-blue-700 text-white rounded-xl py-2.5 text-sm font-semibold transition-colors">
@@ -173,28 +290,28 @@ const ADDIN_ID = 'a1Z2QF2s8nkajnj2rcMUsPQ';
 // ── Preset item library ───────────────────────────────────────────────────────
 const PRESET_CATEGORIES = [
   { name: 'Exterior', items: [
-    { label: 'Exterior body — no damage or dents', type: 'pass_fail' },
-    { label: 'Windscreen — no cracks or chips', type: 'pass_fail' },
-    { label: 'Windows — clean and undamaged', type: 'pass_fail' },
-    { label: 'Mirrors — clean and correctly adjusted', type: 'pass_fail' },
-    { label: 'Tyres — pressure and condition', type: 'pass_fail' },
-    { label: 'Headlights — front working correctly', type: 'pass_fail' },
-    { label: 'Brake & reversing lights — working', type: 'pass_fail' },
-    { label: 'Indicators — front and rear', type: 'pass_fail' },
+    { label: 'Exterior body - no damage or dents', type: 'pass_fail' },
+    { label: 'Windscreen - no cracks or chips', type: 'pass_fail' },
+    { label: 'Windows - clean and undamaged', type: 'pass_fail' },
+    { label: 'Mirrors - clean and correctly adjusted', type: 'pass_fail' },
+    { label: 'Tyres - pressure and condition', type: 'pass_fail' },
+    { label: 'Headlights - front working correctly', type: 'pass_fail' },
+    { label: 'Brake & reversing lights - working', type: 'pass_fail' },
+    { label: 'Indicators - front and rear', type: 'pass_fail' },
   ]},
   { name: 'Mechanical', items: [
-    { label: 'Fluid levels — oil, coolant, washer', type: 'pass_fail' },
+    { label: 'Fluid levels - oil, coolant, washer', type: 'pass_fail' },
     { label: 'Fuel level adequate', type: 'pass_fail' },
-    { label: 'Brakes — firm pedal feel', type: 'pass_fail' },
-    { label: 'Dashboard warning lights — none active', type: 'pass_fail' },
-    { label: 'Seatbelts — all functional', type: 'pass_fail' },
-    { label: 'Horn — working', type: 'pass_fail' },
+    { label: 'Brakes - firm pedal feel', type: 'pass_fail' },
+    { label: 'Dashboard warning lights - none active', type: 'pass_fail' },
+    { label: 'Seatbelts - all functional', type: 'pass_fail' },
+    { label: 'Horn - working', type: 'pass_fail' },
   ]},
   { name: 'Safety Equipment', items: [
-    { label: 'Fire extinguisher — present and in date', type: 'pass_fail' },
-    { label: 'First aid kit — present and stocked', type: 'pass_fail' },
-    { label: 'Hi-vis vest — present in vehicle', type: 'pass_fail' },
-    { label: 'Warning triangle — present', type: 'pass_fail' },
+    { label: 'Fire extinguisher - present and in date', type: 'pass_fail' },
+    { label: 'First aid kit - present and stocked', type: 'pass_fail' },
+    { label: 'Hi-vis vest - present in vehicle', type: 'pass_fail' },
+    { label: 'Warning triangle - present', type: 'pass_fail' },
   ]},
   { name: 'Readings', items: [
     { label: 'Starting mileage / odometer (km)', type: 'number' },
@@ -211,6 +328,7 @@ const PRESET_CATEGORIES = [
 ];
 
 const TYPE_LABEL = { pass_fail:'Pass/Fail', yes_no:'Yes/No', number:'Number', text:'Text' };
+const PRESET_LABELS = new Set(PRESET_CATEGORIES.flatMap(c => c.items.map(i => i.label)));
 
 let DRIVERS       = [];
 let VEHICLES      = [];
@@ -220,6 +338,7 @@ let VEHICLE_GROUPS= []; // [{id, name}] groups present on at least one vehicle
 let templates     = [];
 let activeId      = null;
 let assignType    = 'driver';
+let tripType      = 'na';
 let selected      = new Set();
 let searchQuery   = '';
 let activeGroups  = new Set();
@@ -233,9 +352,6 @@ geotab.addin.vehicleChecklistBuilder = function() {
   return {
     initialize: function(api, state, callback) {
       _api = api;
-      if (state && state.database) {
-        document.getElementById('dbBadge').textContent = state.database;
-      }
       callback();
       loadFromApi();
     },
@@ -265,6 +381,9 @@ function loadFromApi() {
             d.addInDataId = r.id;
             return d;
           }
+          if (d && d.type === 'CustomItemLibrary') {
+            LIBRARY = { addInDataId: r.id, items: Array.isArray(d.items) ? d.items : [], favourites: Array.isArray(d.favourites) ? d.favourites : [] };
+          }
         } catch(e) {}
         return null;
       })
@@ -275,13 +394,15 @@ function loadFromApi() {
       activeId = templates[0].id;
     } else {
       // Nothing saved yet — start with one blank template
-      const blank = { id: 'cl-' + Date.now(), name: 'New Checklist', assignTo: 'driver', assigned: [], requirePhotos: true, items: [] };
+      const blank = { id: 'cl-' + Date.now(), name: 'New Checklist', assignTo: 'driver', assigned: [], requirePhotos: true, tripType: 'na', items: [] };
       templates = [blank];
       activeId = blank.id;
     }
     document.getElementById('dataSourceBadge').classList.add('hidden');
     renderSidebar();
     selectTemplate(activeId);
+    updateConflictIndicator();
+    loadGdConfig();
   }, function() {
     document.getElementById('dataSourceBadge').classList.add('hidden');
   });
@@ -292,7 +413,7 @@ function loadFromApi() {
       DRIVERS = users.map(u => ({
         id: u.id,
         name: ((u.firstName||'') + ' ' + (u.lastName||'')).trim() || u.name || u.id,
-        groups: (u.groups || []).map(g => g.id)
+        groups: (u.driverGroups || u.groups || []).map(g => g.id)
       })).sort((a, b) => a.name.localeCompare(b.name));
       buildDriverGroups();
     }
@@ -380,11 +501,25 @@ function selectTemplate(id) {
   const searchEl = document.getElementById('assignSearch');
   if (searchEl) searchEl.value = '';
   document.getElementById('reqPhotos').checked = t.requirePhotos;
+  setTripType(t.tripType || 'na');
   updateAssignButtons();
   renderAssignList();
   renderItems();
   renderApiPreview();
   renderSidebar();
+}
+
+// ── Trip type ─────────────────────────────────────────────────────────────────
+function setTripType(type) {
+  tripType = type;
+  ['na','pre','post','any'].forEach(function(k) {
+    var btn = document.getElementById('tripBtn-' + k);
+    if (!btn) return;
+    var active = k === type;
+    btn.style.background     = active ? '#2563eb' : 'white';
+    btn.style.color          = active ? 'white'   : '#64748b';
+    btn.style.borderColor    = active ? '#2563eb' : '#e2e8f0';
+  });
 }
 
 // ── Assign type ───────────────────────────────────────────────────────────────
@@ -413,7 +548,7 @@ function toggleGroup(gId) {
 function renderGroupChips() {
   const groups = assignType === 'driver' ? DRIVER_GROUPS : VEHICLE_GROUPS;
   const el = document.getElementById('groupChips');
-  if (groups.length < 2) { el.innerHTML = ''; return; }
+  if (groups.length < 1) { el.innerHTML = ''; return; }
   el.innerHTML = groups.map(g => {
     const on = activeGroups.has(g.id);
     const s = on
@@ -463,11 +598,18 @@ function renderAssignList() {
         const regTag = (assignType === 'asset' && p.licensePlate)
           ? ` <span style="font-size:11px; color:#94a3b8;">${escHtml(p.licensePlate)}</span>`
           : '';
+        const conflicts = getConflictsFor(p.id, assignType);
+        const conflictBtn = conflicts.length
+          ? `<button type="button" onclick="showConflictPopover(event,'${p.id}','${assignType}')"
+               style="margin-left:6px;color:#d97706;background:#fef3c7;border:none;border-radius:4px;padding:1px 6px;font-size:11px;font-weight:600;cursor:pointer;">
+               ⚠ ${conflicts.length}
+             </button>`
+          : '';
         return `
         <label class="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-slate-50 cursor-pointer">
           <input type="checkbox" value="${p.id}" class="w-4 h-4 rounded text-blue-600 accent-blue-600"
                  ${selected.has(p.id) ? 'checked' : ''} onchange="toggleAssign('${p.id}')">
-          <span class="text-sm text-slate-700">${escHtml(p.name)}${regTag}</span>
+          <span class="text-sm text-slate-700 flex items-center">${escHtml(p.name)}${regTag}${conflictBtn}</span>
         </label>`;
       }).join('')
     : `<p class="text-xs text-slate-400 px-2 py-1">${pool.length ? 'No results' : 'None available'}</p>`;
@@ -480,16 +622,59 @@ function toggleAssign(id) {
   renderApiPreview();
 }
 
+function getVisiblePool() {
+  const pool = assignType === 'driver' ? DRIVERS : VEHICLES;
+  const q = searchQuery.trim().toLowerCase();
+  let visible = pool;
+  if (activeGroups.size > 0) {
+    visible = visible.filter(p => (p.groups || []).some(gId => activeGroups.has(gId)));
+  }
+  if (q) {
+    visible = visible.filter(p => {
+      const nameMatch = p.name.toLowerCase().includes(q);
+      const regMatch = assignType === 'asset' && (p.licensePlate || '').toLowerCase().includes(q);
+      return nameMatch || regMatch;
+    });
+  }
+  return visible;
+}
+
+function selectAllVisible() {
+  getVisiblePool().forEach(p => selected.add(p.id));
+  renderAssignList();
+  renderApiPreview();
+}
+
+function clearAllVisible() {
+  getVisiblePool().forEach(p => selected.delete(p.id));
+  renderAssignList();
+  renderApiPreview();
+}
+
 // ── Items list ────────────────────────────────────────────────────────────────
 function renderItems() {
   const t = getActive();
   document.getElementById('itemCount').textContent = `${t.items.length} items`;
-  document.getElementById('itemsList').innerHTML = t.items.map((item, idx) => `
-    <div class="flex items-center gap-3 bg-slate-50 border border-slate-100 rounded-xl px-3 py-2.5">
+  document.getElementById('itemsList').innerHTML = t.items.map((item, idx) => {
+    const inLib = isInLibrary(item.label);
+    const saveBtn = (item.isBodywork || PRESET_LABELS.has(item.label)) ? '' : `
+      <button onclick="saveToLibrary('${item.id}')" class="shrink-0 transition-colors ${inLib ? 'text-blue-500' : 'text-slate-300 hover:text-blue-400'}"
+              title="${inLib ? 'In My Custom Checks — click to remove' : 'Save to My Custom Checks for reuse on other checklists'}">
+        <svg class="w-4 h-4" fill="${inLib ? 'currentColor' : 'none'}" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z"/>
+        </svg>
+      </button>`;
+    return `
+    <div class="flex items-center gap-3 bg-slate-50 border border-slate-100 rounded-xl px-3 py-2.5" data-item-idx="${idx}">
+      <span onpointerdown="dragStart(event, ${idx})" title="Drag to reorder"
+            style="cursor:grab;touch-action:none;user-select:none;color:#cbd5e1;flex-shrink:0;display:flex;align-items:center;padding:2px;">
+        <svg width="10" height="16" viewBox="0 0 10 16" fill="currentColor"><circle cx="2.5" cy="2.5" r="1.6"/><circle cx="7.5" cy="2.5" r="1.6"/><circle cx="2.5" cy="8" r="1.6"/><circle cx="7.5" cy="8" r="1.6"/><circle cx="2.5" cy="13.5" r="1.6"/><circle cx="7.5" cy="13.5" r="1.6"/></svg>
+      </span>
       <span class="text-slate-300 text-xs select-none font-mono w-5 text-center">${idx+1}</span>
       <input type="text" value="${escHtml(item.label)}" placeholder="Item label…"
              class="flex-1 text-sm text-slate-700 bg-transparent focus:outline-none min-w-0"
              oninput="updateLabel('${item.id}', this.value)">
+      ${saveBtn}
       <select onchange="updateType('${item.id}', this.value)"
               class="text-xs text-slate-500 bg-white border border-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-blue-400 shrink-0">
         ${Object.entries(TYPE_LABEL).map(([v,l]) => `<option value="${v}" ${item.type===v?'selected':''}>${l}</option>`).join('')}
@@ -497,8 +682,69 @@ function renderItems() {
       <button onclick="removeItem('${item.id}')" class="text-slate-300 hover:text-red-400 transition-colors shrink-0">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
       </button>
-    </div>
-  `).join('');
+    </div>`;
+  }).join('');
+}
+
+// ── Drag-to-reorder (6-dot handle; rows slide out of the way) ────────────────
+let _drag = null;
+
+function dragStart(e, idx) {
+  e.preventDefault();
+  const list = document.getElementById('itemsList');
+  const rows = [...list.children];
+  const row  = rows[idx];
+  if (!row) return;
+  const gap = 8; // Tailwind space-y-2
+  _drag = {
+    idx: idx,
+    target: idx,
+    row: row,
+    rows: rows,
+    step: row.getBoundingClientRect().height + gap,
+    startY: e.clientY
+  };
+  row.style.position = 'relative';
+  row.style.zIndex = '20';
+  row.style.boxShadow = '0 8px 24px rgba(0,0,0,0.18)';
+  row.style.background = 'white';
+  row.style.transition = 'none';
+  rows.forEach(r => { if (r !== row) r.style.transition = 'transform .15s ease'; });
+  document.addEventListener('pointermove', dragMove);
+  document.addEventListener('pointerup', dragEnd);
+}
+
+function dragMove(e) {
+  if (!_drag) return;
+  const dy = e.clientY - _drag.startY;
+  _drag.row.style.transform = `translateY(${dy}px)`;
+  let target = _drag.idx + Math.round(dy / _drag.step);
+  target = Math.max(0, Math.min(_drag.rows.length - 1, target));
+  if (target !== _drag.target) {
+    _drag.target = target;
+    _drag.rows.forEach((r, i) => {
+      if (r === _drag.row) return;
+      let shift = 0;
+      if (_drag.idx < target && i > _drag.idx && i <= target) shift = -_drag.step;
+      if (_drag.idx > target && i >= target && i < _drag.idx) shift = _drag.step;
+      r.style.transform = shift ? `translateY(${shift}px)` : '';
+    });
+  }
+}
+
+function dragEnd() {
+  if (!_drag) return;
+  document.removeEventListener('pointermove', dragMove);
+  document.removeEventListener('pointerup', dragEnd);
+  const t = getActive();
+  const from = _drag.idx, to = _drag.target;
+  _drag = null;
+  if (from !== to) {
+    const moved = t.items.splice(from, 1)[0];
+    t.items.splice(to, 0, moved);
+  }
+  renderItems();
+  renderApiPreview();
 }
 
 function removeItem(id) {
@@ -514,7 +760,10 @@ function updateType(id, val)  { getActive().items.find(i=>i.id===id).type  = val
 // ── Add Item Modal ────────────────────────────────────────────────────────────
 function openAddItemModal() {
   selectedPresets.clear();
+  modalTab = 'browse';
+  saveCustomFlag = false;
   renderPresetList();
+  paintSaveCustom();
   document.getElementById('customLabel').value = '';
   document.getElementById('addItemModal').classList.remove('hidden');
   document.getElementById('addItemModal').classList.add('flex');
@@ -540,33 +789,84 @@ function togglePreset(label, type) {
 
 function renderPresetList() {
   const existing = new Set(getActive().items.map(i => i.label));
-  document.getElementById('presetList').innerHTML = PRESET_CATEGORIES.map(cat => `
-    <div>
-      <p class="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-2">${cat.name}</p>
-      <div class="flex flex-wrap gap-2">
-        ${cat.items.map(item => {
-          const alreadyAdded = existing.has(item.label);
-          const isSelected = selectedPresets.has(item.label);
-          const chipStyle = alreadyAdded
-            ? 'border:1.5px solid #e2e8f0; border-radius:8px; padding:5px 10px; font-size:12px; display:flex; align-items:center; gap:6px; background:white; opacity:0.4; cursor:not-allowed; text-align:left;'
-            : isSelected
-              ? 'border:1.5px solid #0047BB; border-radius:8px; padding:5px 10px; font-size:12px; display:flex; align-items:center; gap:6px; background:#eff6ff; color:#1e40af; cursor:pointer; text-align:left;'
-              : 'border:1.5px solid #e2e8f0; border-radius:8px; padding:5px 10px; font-size:12px; display:flex; align-items:center; gap:6px; background:white; cursor:pointer; text-align:left;';
-          const badgeStyle = isSelected
-            ? 'font-size:10px; padding:1px 5px; border-radius:4px; background:#bfdbfe; color:#1e40af; flex-shrink:0; margin-left:auto;'
-            : 'font-size:10px; padding:1px 5px; border-radius:4px; background:#f1f5f9; color:#64748b; flex-shrink:0; margin-left:auto;';
-          return `<button
-            style="${chipStyle}"
-            onclick="${alreadyAdded ? '' : `togglePreset(\`${item.label}\`, '${item.type}')`}"
-            ${alreadyAdded ? 'title="Already in checklist"' : ''}>
-            ${isSelected ? '<svg style="width:12px;height:12px;flex-shrink:0;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>' : ''}
-            <span>${item.label}</span>
-            <span style="${badgeStyle}">${TYPE_LABEL[item.type]}</span>
-          </button>`;
-        }).join('')}
-      </div>
-    </div>
-  `).join('');
+  const favSet = new Set(LIBRARY.favourites || []);
+
+  const chip = (item, isCustom) => {
+    const alreadyAdded = existing.has(item.label);
+    const isSelected = selectedPresets.has(item.label);
+    const isFav = favSet.has(item.label);
+    const base = 'border-radius:8px; padding:5px 10px; font-size:12px; display:flex; align-items:center; gap:6px; text-align:left;';
+    const style = alreadyAdded
+      ? base + 'border:1.5px solid #e2e8f0; background:white; opacity:0.45;'
+      : isSelected
+        ? base + 'border:1.5px solid #0047BB; background:#eff6ff; color:#1e40af;'
+        : base + 'border:1.5px solid ' + (isCustom ? '#bfdbfe' : '#e2e8f0') + '; background:white;';
+    return `<div style="${style}">
+      <span style="cursor:${alreadyAdded ? 'not-allowed' : 'pointer'};display:flex;align-items:center;gap:6px;"
+            onclick="${alreadyAdded ? '' : `togglePreset(\`${item.label}\`, '${item.type}')`}" ${alreadyAdded ? 'title="Already in checklist"' : ''}>
+        ${isSelected ? '<svg style="width:12px;height:12px;flex-shrink:0;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>' : ''}
+        <span>${item.label}</span>
+        <span style="font-size:10px; padding:1px 5px; border-radius:4px; background:#f1f5f9; color:#64748b; flex-shrink:0;">${TYPE_LABEL[item.type]}</span>
+      </span>
+      <span onclick="event.stopPropagation(); toggleFavourite(\`${item.label}\`)" title="${isFav ? 'Remove from favourites' : 'Star as favourite'}"
+            style="cursor:pointer;color:${isFav ? '#f59e0b' : '#cbd5e1'};font-size:13px;line-height:1;">${isFav ? '&#9733;' : '&#9734;'}</span>
+      ${isCustom ? `<span onclick="event.stopPropagation(); removeFromLibrary(\`${item.label}\`)" title="Remove from My Custom Checks"
+            style="cursor:pointer;color:#cbd5e1;font-size:14px;line-height:1;">&times;</span>` : ''}
+    </div>`;
+  };
+
+  const section = (title, colorCls, chipsHtml) => chipsHtml
+    ? `<div><p class="text-xs font-semibold ${colorCls} uppercase tracking-widest mb-2">${title}</p><div class="flex flex-wrap gap-2">${chipsHtml}</div></div>`
+    : '';
+
+  let html = '';
+  if (modalTab === 'fav') {
+    const favChips = LIBRARY.items.filter(i => favSet.has(i.label)).map(i => chip(i, true)).join('')
+      + PRESET_CATEGORIES.flatMap(c => c.items).filter(i => favSet.has(i.label)).map(i => chip(i, false)).join('');
+    html = favChips
+      ? section('Favourites', 'text-amber-500', favChips)
+      : '<p class="text-sm text-slate-400">No favourites yet — tap the &#9734; on any item to pin it here.</p>';
+  } else {
+    html = PRESET_CATEGORIES.map(cat => section(cat.name, 'text-slate-400', cat.items.map(i => chip(i, false)).join(''))).join('')
+      + section('My Custom Checks', 'text-blue-500', LIBRARY.items.map(i => chip(i, true)).join(''));
+  }
+  document.getElementById('presetList').innerHTML = html;
+  paintModalTabs();
+}
+
+// ── Modal tabs + favourites + save-for-reuse toggle ──────────────────────────
+let modalTab = 'browse';
+let saveCustomFlag = false;
+
+function setModalTab(tab) { modalTab = tab; renderPresetList(); }
+
+function paintModalTabs() {
+  const on  = 'padding:6px 14px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;border:1.5px solid #0047BB;background:#eff6ff;color:#1e40af;';
+  const off = 'padding:6px 14px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;border:1.5px solid #e2e8f0;background:white;color:#64748b;';
+  const b = document.getElementById('tab-browse'), f = document.getElementById('tab-fav');
+  if (!b || !f) return;
+  b.style.cssText = modalTab === 'browse' ? on : off;
+  f.style.cssText = modalTab === 'fav' ? on : off;
+}
+
+function toggleFavourite(label) {
+  LIBRARY.favourites = LIBRARY.favourites || [];
+  const i = LIBRARY.favourites.indexOf(label);
+  if (i === -1) LIBRARY.favourites.push(label);
+  else LIBRARY.favourites.splice(i, 1);
+  persistLibrary(i === -1 ? 'Added to favourites' : 'Removed from favourites');
+  renderPresetList();
+}
+
+function toggleSaveCustom() { saveCustomFlag = !saveCustomFlag; paintSaveCustom(); }
+
+function paintSaveCustom() {
+  const b = document.getElementById('saveCustomToggle');
+  if (!b) return;
+  b.innerHTML = saveCustomFlag ? '&#9733; Saving' : '&#9734; Save';
+  b.style.border = saveCustomFlag ? '1.5px solid #f59e0b' : '1.5px solid #e2e8f0';
+  b.style.color = saveCustomFlag ? '#b45309' : '#64748b';
+  b.style.background = saveCustomFlag ? '#fffbeb' : 'white';
 }
 
 function addSelectedItems() {
@@ -586,6 +886,10 @@ function addSelectedItems() {
     const customType = document.getElementById('customType').value;
     t.items.push({ id: 'i' + Date.now(), label: customLabel, type: customType });
     added++;
+    if (saveCustomFlag && !isInLibrary(customLabel)) {
+      LIBRARY.items.push({ label: customLabel, type: customType });
+      persistLibrary('Saved to My Custom Checks');
+    }
   }
 
   if (added === 0) { closeAddItemModal(); return; }
@@ -596,9 +900,70 @@ function addSelectedItems() {
   toast(`Added ${added} item${added>1?'s':''}`);
 }
 
-// ── New / Delete / Save ───────────────────────────────────────────────────────
+// ── My Custom Checks (shared per-database item library) ──────────────────────
+let LIBRARY = { addInDataId: null, items: [], favourites: [] }; // items: [{label, type}]; favourites: [label]
+
+function isInLibrary(label) {
+  const l = String(label || '').trim().toLowerCase();
+  return !!l && LIBRARY.items.some(i => i.label.trim().toLowerCase() === l);
+}
+
+function saveToLibrary(itemId) {
+  const item = getActive().items.find(i => i.id === itemId);
+  if (!item || !item.label.trim()) { toast('Give the item a label first'); return; }
+  if (isInLibrary(item.label)) {
+    removeFromLibrary(item.label.trim());   // toggle off: unsave + unstar
+    return;
+  }
+  LIBRARY.items.push({ label: item.label.trim(), type: item.type });
+  persistLibrary('Saved to My Custom Checks');
+  renderItems();
+}
+
+function removeFromLibrary(label) {
+  LIBRARY.items = LIBRARY.items.filter(i => i.label !== label);
+  LIBRARY.favourites = (LIBRARY.favourites || []).filter(l => l !== label);
+  persistLibrary('Removed from My Custom Checks');
+  renderPresetList();
+  renderItems();
+}
+
+function persistLibrary(msg) {
+  if (!_api) { toast(msg + ' (local only — not connected)'); return; }
+  const payload = { type: 'CustomItemLibrary', items: LIBRARY.items, favourites: LIBRARY.favourites || [], updatedAt: new Date().toISOString() };
+  function onErr(err) { console.error('Library save failed', err); toast('Library save failed'); }
+  if (LIBRARY.addInDataId) {
+    _api.call('Set', { typeName: 'AddInData', entity: { id: LIBRARY.addInDataId, addInId: ADDIN_ID, details: payload } },
+      function() { toast(msg); }, onErr);
+  } else {
+    _api.call('Add', { typeName: 'AddInData', entity: { addInId: ADDIN_ID, details: payload } },
+      function(id) { LIBRARY.addInDataId = id; toast(msg); }, onErr);
+  }
+}
+
+// ── New / Duplicate / Delete / Save ──────────────────────────────────────────
+function duplicateChecklist() {
+  const src = getActive();
+  if (!src) return;
+  const t = JSON.parse(JSON.stringify(src));
+  t.id = 'cl-' + Date.now();
+  t.addInDataId = null;          // saves as a NEW record on first Save
+  t.name = (src.name || 'Checklist') + ' (copy)';
+  t.assigned = [];               // fresh copy gets its own vehicle/driver assignment
+  t.items.forEach(i => { i.id = 'i' + Date.now() + Math.random().toString(36).slice(2, 6); });
+  templates.unshift(t);
+  selectTemplate(t.id);
+  setTimeout(() => document.getElementById('clName').select(), 50);
+  toast('Duplicated — rename, assign a vehicle, then Save');
+}
+
 function newChecklist() {
-  const t = { id:'cl-'+Date.now(), name:'New Checklist', assignTo:'driver', assigned:[], requirePhotos:true, items:[] };
+  const t = {
+    id:'cl-'+Date.now(), name:'New Checklist', assignTo:'driver', assigned:[], requirePhotos:true,
+    items:[
+      { id:'bodywork-'+Date.now(), label:'Bodywork check — any damage?', type:'pass_fail', isBodywork:true }
+    ]
+  };
   templates.unshift(t);
   selectTemplate(t.id);
   setTimeout(() => document.getElementById('clName').select(), 50);
@@ -607,6 +972,7 @@ function newChecklist() {
 function deleteChecklist() {
   if (templates.length <= 1) { toast('Cannot delete the only checklist'); return; }
   const t = getActive();
+  if (!confirm('Delete "' + (t.name || 'this checklist') + '"? This cannot be undone.')) return;
   if (_api && t.addInDataId) {
     _api.call('Remove', {
       typeName: 'AddInData',
@@ -620,10 +986,24 @@ function deleteChecklist() {
 
 function saveChecklist() {
   const t = getActive();
-  t.name = document.getElementById('clName').value.trim() || 'Untitled';
+  const newName = document.getElementById('clName').value.trim() || 'Untitled';
+
+  // Duplicate name check — ignore the current template itself
+  const duplicate = templates.find(function(other) {
+    return other.id !== t.id && other.name.trim().toLowerCase() === newName.toLowerCase();
+  });
+  if (duplicate) {
+    toast('A checklist named "' + newName + '" already exists. Please use a different name.');
+    document.getElementById('clName').focus();
+    document.getElementById('clName').select();
+    return;
+  }
+
+  t.name = newName;
   t.assignTo = assignType;
   t.assigned = [...selected];
   t.requirePhotos = document.getElementById('reqPhotos').checked;
+  t.tripType = tripType;
   renderSidebar();
 
   if (!_api) { toast('Saved locally (MyGeotab not connected)'); return; }
@@ -632,6 +1012,7 @@ function saveChecklist() {
     type: 'ChecklistTemplate',
     id: t.id, name: t.name, assignTo: t.assignTo,
     assigned: t.assigned, requirePhotos: t.requirePhotos,
+    tripType: t.tripType || 'na',
     items: t.items, updatedAt: new Date().toISOString()
   };
 
@@ -645,16 +1026,389 @@ function saveChecklist() {
     _api.call('Set', {
       typeName: 'AddInData',
       entity: { id: t.addInDataId, addInId: ADDIN_ID, details: payload }
-    }, function() { toast('Saved to MyGeotab'); }, onSaveErr);
+    }, function() { toast('Saved to MyGeotab'); updateConflictIndicator(); }, onSaveErr);
   } else {
     _api.call('Add', {
       typeName: 'AddInData',
       entity: { addInId: ADDIN_ID, details: payload }
-    }, function(id) { t.addInDataId = id; toast('Saved to MyGeotab'); }, onSaveErr);
+    }, function(id) { t.addInDataId = id; toast('Saved to MyGeotab'); updateConflictIndicator(); }, onSaveErr);
   }
 }
 
 function renderApiPreview() {}
+
+// ── Google Drive Integration ──────────────────────────────────────────────────
+const GD_CLIENT_ID     = '1079509518058-aicdrp0e2i9o19dogatjim2lajpufsid.apps.googleusercontent.com';
+const GD_CLIENT_SECRET = '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';
+const GD_SCOPES = 'https://www.googleapis.com/auth/drive.file';
+const GD_CONFIG_TYPE = 'GoogleDriveConfig';
+let GD_CONFIG = null; // { accessToken, refreshToken, email, expiresAt }
+
+function openDriveSetup() {
+  document.getElementById('driveModal').classList.remove('hidden');
+  if (GD_CONFIG && GD_CONFIG.refreshToken) {
+    showDriveConnected();
+  } else {
+    showDriveDisconnected();
+  }
+}
+
+function closeDriveSetup() {
+  document.getElementById('driveModal').classList.add('hidden');
+}
+
+function showDriveConnected() {
+  document.getElementById('driveStateDisconnected').classList.add('hidden');
+  document.getElementById('driveStateConnected').classList.remove('hidden');
+  document.getElementById('driveConnectedEmail').textContent = GD_CONFIG.email || '';
+  document.getElementById('driveBtnLabel').textContent = '✓ Drive Connected';
+  document.getElementById('driveBtn').style.background = 'rgba(34,197,94,0.25)';
+}
+
+function showDriveDisconnected() {
+  document.getElementById('driveStateConnected').classList.add('hidden');
+  document.getElementById('driveStateDisconnected').classList.remove('hidden');
+  document.getElementById('driveBtnLabel').textContent = 'Connect Storage';
+  document.getElementById('driveBtn').style.background = 'rgba(255,255,255,0.15)';
+}
+
+async function startGoogleAuth() {
+  // Generate PKCE code_verifier (128 random bytes → base64url)
+  const array = new Uint8Array(96);
+  crypto.getRandomValues(array);
+  const verifier = btoa(String.fromCharCode(...array))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+  // Derive code_challenge = BASE64URL(SHA-256(verifier))
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
+  const challenge = btoa(String.fromCharCode(...new Uint8Array(digest)))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+  localStorage.setItem('gd_pkce_verifier', verifier);
+
+  const redirectUri = 'https://bjornvandenwijngaert-tech.github.io/drive-addin-inspection/oauth-callback.html';
+  const scope = GD_SCOPES + ' https://www.googleapis.com/auth/userinfo.email';
+  const url = 'https://accounts.google.com/o/oauth2/v2/auth'
+    + '?client_id='             + encodeURIComponent(GD_CLIENT_ID)
+    + '&redirect_uri='          + encodeURIComponent(redirectUri)
+    + '&response_type=code'
+    + '&scope='                 + encodeURIComponent(scope)
+    + '&access_type=offline'
+    + '&prompt=consent'
+    + '&code_challenge='        + encodeURIComponent(challenge)
+    + '&code_challenge_method=S256';
+  window.open(url, '_blank');
+  startListeningForAuthCode();
+}
+
+function handleGoogleAuthCallback() {
+  // Not used — polling handles the callback instead
+}
+
+function startListeningForAuthCode() {
+  var handled = false;
+
+  function handle(code) {
+    if (handled) return;
+    handled = true;
+    window.removeEventListener('message', onMessage);
+    clearInterval(pollInterval);
+    localStorage.removeItem('gd_oauth_code');
+    localStorage.removeItem('gd_oauth_ts');
+    exchangeAuthCode(code);
+  }
+
+  // Primary: postMessage from popup (works when opener context is accessible)
+  function onMessage(event) {
+    if (!event.data || event.data.type !== 'GD_AUTH_CODE') return;
+    handle(event.data.code);
+  }
+  window.addEventListener('message', onMessage);
+
+  // Fallback: poll localStorage (reliable inside MyGeotab iframe where opener postMessage may not reach)
+  var pollInterval = setInterval(function() {
+    var code = localStorage.getItem('gd_oauth_code');
+    var ts   = parseInt(localStorage.getItem('gd_oauth_ts') || '0', 10);
+    if (code && (Date.now() - ts) < 120000) {
+      handle(code);
+    }
+  }, 500);
+
+  // Stop both after 5 minutes
+  setTimeout(function() {
+    if (!handled) {
+      window.removeEventListener('message', onMessage);
+      clearInterval(pollInterval);
+    }
+  }, 300000);
+}
+
+function exchangeAuthCode(code) {
+  const verifier = localStorage.getItem('gd_pkce_verifier');
+  if (!verifier) {
+    toast('⚠ PKCE verifier missing — please try connecting again.');
+    document.getElementById('driveAuthError').textContent = 'Auth error: verifier missing. Please try again.';
+    document.getElementById('driveAuthError').classList.remove('hidden');
+    return;
+  }
+  localStorage.removeItem('gd_pkce_verifier');
+
+  toast('Code received — exchanging with Google…');
+
+  const redirectUri = 'https://bjornvandenwijngaert-tech.github.io/drive-addin-inspection/oauth-callback.html';
+
+  fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      code:          code,
+      client_id:     GD_CLIENT_ID,
+      client_secret: GD_CLIENT_SECRET,
+      code_verifier: verifier,
+      redirect_uri:  redirectUri,
+      grant_type:    'authorization_code'
+    })
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    if (data.error) {
+      const msg = 'Google auth failed: ' + (data.error_description || data.error);
+      toast(msg);
+      document.getElementById('driveAuthError').textContent = msg;
+      document.getElementById('driveAuthError').classList.remove('hidden');
+      return;
+    }
+    toast('Token received — fetching account info…');
+    fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+      headers: { 'Authorization': 'Bearer ' + data.access_token }
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(user) {
+      const config = {
+        type:         GD_CONFIG_TYPE,
+        accessToken:  data.access_token,
+        refreshToken: data.refresh_token,
+        expiresAt:    Date.now() + (data.expires_in * 1000),
+        email:        user.email
+      };
+      saveGdConfig(config);
+      document.getElementById('driveModal').classList.remove('hidden');
+    });
+  })
+  .catch(function(err) {
+    console.error('Token exchange failed:', err);
+    const msg = 'Connection failed: ' + err.message;
+    toast(msg);
+    document.getElementById('driveAuthError').textContent = msg;
+    document.getElementById('driveAuthError').classList.remove('hidden');
+  });
+}
+
+function saveGdConfig(config) {
+  if (!_api) { toast('Not connected to MyGeotab'); return; }
+  GD_CONFIG = config;
+  const payload = Object.assign({ type: GD_CONFIG_TYPE }, config);
+  _api.call('Get', { typeName: 'AddInData', search: { addInId: ADDIN_ID } }, function(results) {
+    const existing = results.find(r => r.details && r.details.type === GD_CONFIG_TYPE);
+    if (existing) {
+      _api.call('Set', { typeName: 'AddInData', entity: { id: existing.id, addInId: ADDIN_ID, details: payload } },
+        function() { showDriveConnected(); toast('Google Drive connected'); },
+        function(err) { toast('Save failed: ' + (err && err.message || 'unknown')); });
+    } else {
+      _api.call('Add', { typeName: 'AddInData', entity: { addInId: ADDIN_ID, details: payload } },
+        function() { showDriveConnected(); toast('Google Drive connected'); },
+        function(err) { toast('Save failed: ' + (err && err.message || 'unknown')); });
+    }
+  }, function() { toast('Could not save config'); });
+}
+
+function loadGdConfig() {
+  if (!_api) return;
+  _api.call('Get', { typeName: 'AddInData', search: { addInId: ADDIN_ID } }, function(results) {
+    const config = results.find(r => r.details && r.details.type === GD_CONFIG_TYPE);
+    if (config) {
+      GD_CONFIG = config.details;
+      GD_CONFIG._addInDataId = config.id;
+      document.getElementById('driveBtnLabel').textContent = '✓ Drive Connected';
+      document.getElementById('driveBtn').style.background = 'rgba(34,197,94,0.25)';
+    }
+  }, function() {});
+}
+
+function disconnectGoogleDrive() {
+  if (!_api || !GD_CONFIG || !GD_CONFIG._addInDataId) return;
+  _api.call('Remove', { typeName: 'AddInData', entity: { id: GD_CONFIG._addInDataId } },
+    function() {
+      GD_CONFIG = null;
+      showDriveDisconnected();
+      closeDriveSetup();
+      toast('Google Drive disconnected');
+    }, function(err) { toast('Disconnect failed: ' + (err && err.message || 'unknown')); });
+}
+
+// ── Conflict detection ────────────────────────────────────────────────────────
+function getConflictsFor(id, type) {
+  return templates.filter(t => t.id !== activeId && t.assignTo === type && Array.isArray(t.assigned) && t.assigned.includes(id));
+}
+
+function getAllConflicts() {
+  const conflicts = { driver: {}, asset: {} };
+  templates.forEach(t => {
+    (t.assigned || []).forEach(id => {
+      const type = t.assignTo === 'driver' ? 'driver' : 'asset';
+      if (!conflicts[type][id]) conflicts[type][id] = [];
+      conflicts[type][id].push({ templateId: t.id, name: t.name, addInDataId: t.addInDataId });
+    });
+  });
+  // Keep only those with more than one checklist
+  ['driver','asset'].forEach(type => {
+    Object.keys(conflicts[type]).forEach(id => {
+      if (conflicts[type][id].length < 2) delete conflicts[type][id];
+    });
+  });
+  return conflicts;
+}
+
+function updateConflictIndicator() {
+  const conflicts = getAllConflicts();
+  const total = Object.keys(conflicts.driver).length + Object.keys(conflicts.asset).length;
+  const btn = document.getElementById('conflictBtn');
+  const count = document.getElementById('conflictCount');
+  if (total > 0) {
+    btn.classList.remove('hidden');
+    count.textContent = total;
+  } else {
+    btn.classList.add('hidden');
+  }
+  renderAssignList();
+}
+
+function showConflictPopover(event, id, type) {
+  event.stopPropagation();
+  const popover = document.getElementById('conflictPopover');
+  // Toggle off if already open for same entity
+  if (!popover.classList.contains('hidden') && popover.dataset.entityId === id) {
+    closeConflictPopover();
+    return;
+  }
+  const conflicts = getConflictsFor(id, type);
+  document.getElementById('conflictPopoverList').innerHTML = conflicts.map(c =>
+    `<p class="text-sm text-slate-700 py-1 border-b border-slate-100 last:border-0">${escHtml(c.name)}</p>`
+  ).join('');
+  const rect = event.target.getBoundingClientRect();
+  popover.style.top = (rect.bottom + 6) + 'px';
+  popover.style.left = Math.min(rect.left, window.innerWidth - 240) + 'px';
+  popover.dataset.entityId = id;
+  popover.classList.remove('hidden');
+  setTimeout(() => document.addEventListener('click', closePopoverOnce), 10);
+}
+
+function closeConflictPopover() {
+  document.getElementById('conflictPopover').classList.add('hidden');
+  document.removeEventListener('click', closePopoverOnce);
+}
+
+function closePopoverOnce() {
+  closeConflictPopover();
+}
+
+function openConflictPanel() {
+  const conflicts = getAllConflicts();
+  const pool = { driver: DRIVERS, asset: VEHICLES };
+  let html = '';
+
+  ['driver','asset'].forEach(type => {
+    const ids = Object.keys(conflicts[type]);
+    if (!ids.length) return;
+    html += `<div>
+      <p class="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-2">${type === 'driver' ? 'Drivers' : 'Vehicles'}</p>
+      <div class="space-y-2">`;
+    ids.forEach(id => {
+      const entity = pool[type].find(p => p.id === id);
+      const name = entity ? entity.name : id;
+      const lists = conflicts[type][id];
+      html += `
+        <div class="border border-slate-200 rounded-xl overflow-hidden">
+          <button onclick="toggleConflictEntry('${type}-${id}')" class="w-full flex items-center justify-between px-4 py-3 bg-white hover:bg-slate-50 text-left">
+            <span class="text-sm font-semibold text-slate-700">${escHtml(name)}</span>
+            <div class="flex items-center gap-2">
+              <span class="text-xs bg-red-100 text-red-600 font-semibold px-2 py-0.5 rounded-full">${lists.length} lists</span>
+              <svg class="w-4 h-4 text-slate-400 transition-transform" id="chevron-${type}-${id}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            </div>
+          </button>
+          <div id="entry-${type}-${id}" class="hidden border-t border-slate-100 bg-slate-50 px-4 py-3 space-y-2">
+            ${lists.map(l => `
+              <label class="flex items-center gap-3 cursor-pointer">
+                <input type="checkbox" checked class="w-4 h-4 accent-blue-600"
+                  onchange="resolveConflict('${id}','${type}','${l.templateId}',this.checked)">
+                <span class="text-sm text-slate-700">${escHtml(l.name)}</span>
+              </label>`).join('')}
+            <button onclick="saveConflictResolution('${id}','${type}')"
+              class="mt-2 w-full text-xs bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 rounded-lg transition-colors">
+              Save Changes
+            </button>
+          </div>
+        </div>`;
+    });
+    html += '</div></div>';
+  });
+
+  document.getElementById('conflictList').innerHTML = html || '<p class="text-sm text-slate-400 text-center py-8">No conflicts found.</p>';
+  document.getElementById('conflictOverlay').classList.remove('hidden');
+  setTimeout(() => document.getElementById('conflictPanel').classList.remove('translate-x-full'), 10);
+}
+
+function closeConflictPanel() {
+  document.getElementById('conflictPanel').classList.add('translate-x-full');
+  setTimeout(() => document.getElementById('conflictOverlay').classList.add('hidden'), 300);
+}
+
+function toggleConflictEntry(key) {
+  const entry = document.getElementById('entry-' + key);
+  const chevron = document.getElementById('chevron-' + key);
+  entry.classList.toggle('hidden');
+  chevron.classList.toggle('rotate-90');
+}
+
+// Track pending uncheck changes per entity
+const pendingRemovals = {};
+
+function resolveConflict(entityId, type, templateId, checked) {
+  const key = type + '-' + entityId;
+  if (!pendingRemovals[key]) pendingRemovals[key] = {};
+  pendingRemovals[key][templateId] = checked;
+}
+
+function saveConflictResolution(entityId, type) {
+  const key = type + '-' + entityId;
+  const changes = pendingRemovals[key] || {};
+  const affectedTemplates = templates.filter(t => changes[t.id] === false);
+  if (!affectedTemplates.length) { toast('No changes to save'); return; }
+  if (!_api) { toast('Not connected to MyGeotab'); return; }
+
+  let remaining = affectedTemplates.length;
+  affectedTemplates.forEach(t => {
+    t.assigned = (t.assigned || []).filter(id => id !== entityId);
+    const payload = {
+      type: 'ChecklistTemplate', id: t.id, name: t.name,
+      assignTo: t.assignTo, assigned: t.assigned,
+      requirePhotos: t.requirePhotos, items: t.items,
+      updatedAt: new Date().toISOString()
+    };
+    _api.call('Set', {
+      typeName: 'AddInData',
+      entity: { id: t.addInDataId, addInId: ADDIN_ID, details: payload }
+    }, function() {
+      if (--remaining === 0) {
+        toast('Conflicts resolved');
+        delete pendingRemovals[key];
+        updateConflictIndicator();
+        closeConflictPanel();
+        setTimeout(openConflictPanel, 350);
+      }
+    }, function(err) { toast('Save failed: ' + (err && err.message || 'unknown')); });
+  });
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); }
@@ -712,6 +1466,14 @@ function testAddInData() {
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 renderSidebar(); // renders empty state until MyGeotab calls initialize()
+
+// Auto-reload once if initialize() hasn't fired (MyGeotab cold-load behaviour)
+if (!sessionStorage.getItem('cb_reloaded')) {
+  sessionStorage.setItem('cb_reloaded', '1');
+  setTimeout(function() { if (!_api) window.location.reload(); }, 1500);
+} else {
+  sessionStorage.removeItem('cb_reloaded');
+}
 </script>
 </body>
 </html>

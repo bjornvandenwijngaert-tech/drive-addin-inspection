@@ -126,8 +126,9 @@
 
 <script>
 const ADDIN_ID = 'a1Z2QF2s8nkajnj2rcMUsPQ';
-let _api  = null;
-let _state = null;
+const SESSION_KEY = 'myg_checkin_session';
+
+let SESSION = null; // { server, database, sessionId, userName, userId }
 
 let DRIVER    = { id: '', name: '…' };
 let VEHICLES  = [];
@@ -137,34 +138,162 @@ let selectedVehicle = null;
 let responses = {};
 let photos    = [];
 
-// ── Geotab Drive add-in lifecycle ─────────────────────────────────────────────
+// ── Direct MyGeotab JSON-RPC ──────────────────────────────────────────────────
+function rpc(method, params, onSuccess, onError) {
+  var server = SESSION ? SESSION.server : 'my.geotab.com';
+  var body = {
+    method: method,
+    params: Object.assign({ credentials: SESSION ? {
+      database: SESSION.database,
+      sessionId: SESSION.sessionId,
+      userName: SESSION.userName
+    } : undefined }, params)
+  };
+  fetch('https://' + server + '/apiv1', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    if (data.error) { if (onError) onError(data.error); return; }
+    if (onSuccess) onSuccess(data.result);
+  })
+  .catch(function(err) { if (onError) onError(err); });
+}
+
+function authenticate(server, database, username, password, onSuccess, onError) {
+  fetch('https://' + server + '/apiv1', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      method: 'Authenticate',
+      params: { database: database, userName: username, password: password }
+    })
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    if (data.error) { if (onError) onError(data.error); return; }
+    var creds = data.result.credentials;
+    var path  = data.result.path;
+    SESSION = {
+      server:    path && path !== 'ThisServer' ? path : server,
+      database:  creds.database,
+      sessionId: creds.sessionId,
+      userName:  creds.userName,
+      userId:    null
+    };
+    localStorage.setItem(SESSION_KEY, JSON.stringify(SESSION));
+    onSuccess(SESSION);
+  })
+  .catch(function(err) { if (onError) onError(err); });
+}
+
+// ── Login screen ──────────────────────────────────────────────────────────────
+function showLoginScreen() {
+  var saved = null;
+  try { saved = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null'); } catch(e) {}
+
+  document.getElementById('screen-select').classList.add('hidden');
+  var loginHtml = '<div id="screen-login" class="min-h-screen flex flex-col">'
+    + '<header class="bg-[#0047BB] text-white px-5 py-4 flex items-center gap-3 shadow">'
+    + '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>'
+    + '<span class="font-semibold">Vehicle Check-In</span></header>'
+    + '<div class="flex-1 flex flex-col max-w-lg mx-auto w-full p-5 pt-10">'
+    + '<h2 class="text-xl font-bold text-slate-800 mb-1">Sign in</h2>'
+    + '<p class="text-sm text-slate-400 mb-6">Use your MyGeotab credentials</p>'
+    + '<div class="space-y-3">'
+    + '<input id="li-server" type="text" placeholder="Server (e.g. my.geotab.com)" value="' + (saved ? saved.server : 'my.geotab.com') + '" class="w-full border-2 border-slate-200 focus:border-blue-400 rounded-xl px-4 py-3 text-sm focus:outline-none"/>'
+    + '<input id="li-db" type="text" placeholder="Database" value="' + (saved ? saved.database : '') + '" class="w-full border-2 border-slate-200 focus:border-blue-400 rounded-xl px-4 py-3 text-sm focus:outline-none"/>'
+    + '<input id="li-user" type="email" placeholder="Username (email)" value="' + (saved ? saved.userName : '') + '" class="w-full border-2 border-slate-200 focus:border-blue-400 rounded-xl px-4 py-3 text-sm focus:outline-none"/>'
+    + '<input id="li-pass" type="password" placeholder="Password" class="w-full border-2 border-slate-200 focus:border-blue-400 rounded-xl px-4 py-3 text-sm focus:outline-none"/>'
+    + '</div>'
+    + '<p id="li-err" class="text-sm text-red-500 mt-3 hidden"></p>'
+    + '<button onclick="doLogin()" class="mt-5 w-full py-3.5 rounded-xl font-semibold text-sm bg-blue-600 text-white hover:bg-blue-700 transition-all">Sign In</button>'
+    + '</div></div>';
+  document.body.insertAdjacentHTML('beforeend', loginHtml);
+}
+
+function doLogin() {
+  var server = document.getElementById('li-server').value.trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+  var db     = document.getElementById('li-db').value.trim();
+  var user   = document.getElementById('li-user').value.trim();
+  var pass   = document.getElementById('li-pass').value;
+  var errEl  = document.getElementById('li-err');
+  errEl.classList.add('hidden');
+
+  authenticate(server, db, user, pass, function(session) {
+    document.getElementById('screen-login').remove();
+    document.getElementById('screen-select').classList.remove('hidden');
+    loadData();
+  }, function(err) {
+    errEl.textContent = (err && err.message) ? err.message : 'Login failed. Check your credentials.';
+    errEl.classList.remove('hidden');
+  });
+}
+
+// ── Geotab Drive add-in lifecycle (fallback if bridge works) ──────────────────
 if (typeof geotab === 'undefined') { var geotab = { addin: {} }; }
 geotab.addin.vehicleCheckIn = function() {
   return {
     initialize: function(api, state, callback) {
-      _api   = api;
-      _state = state;
+      // Drive bridge is working — wrap it as our rpc layer
+      SESSION = { _driveApi: api };
+      DRIVER.id = (state && state.driverId) ? state.driverId : '';
       callback();
-      loadDriveData();
+      loadData();
     },
-    focus: function(api, state) { _api = api; _state = state; },
+    focus: function(api, state) {},
     blur: function() {}
   };
 };
 
-// ── Load real data from MyGeotab ──────────────────────────────────────────────
-function loadDriveData(callback) {
-  var pending = 3;
-  function done() { if (--pending === 0 && callback) callback(); }
+function apiCall(method, params, onSuccess, onError) {
+  if (SESSION && SESSION._driveApi) {
+    SESSION._driveApi.call(method, params, onSuccess, onError || function() {});
+  } else {
+    rpc(method, { typeName: params.typeName, search: params.search, entity: params.entity }, onSuccess, onError);
+  }
+}
 
-  // Driver identity from session state
-  var driverId = _state && _state.driverId ? _state.driverId : null;
-  if (driverId) {
-    DRIVER.id = driverId;
-    _api.call('Get', { typeName: 'User', search: { id: driverId } }, function(users) {
+// ── Boot ──────────────────────────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', function() {
+  // Give Drive 1.5s to call initialize before falling back to login
+  setTimeout(function() {
+    if (SESSION) return; // Drive bridge kicked in
+    var saved = null;
+    try { saved = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null'); } catch(e) {}
+    if (saved && saved.sessionId) {
+      SESSION = saved;
+      loadData();
+    } else {
+      showLoginScreen();
+    }
+  }, 1500);
+});
+
+// ── Load data ─────────────────────────────────────────────────────────────────
+function loadData() {
+  var pending = 3;
+  function done() { if (--pending === 0) {} }
+
+  // Driver name
+  if (DRIVER.id && SESSION && SESSION._driveApi) {
+    apiCall('Get', { typeName: 'User', search: { id: DRIVER.id } }, function(users) {
       if (users && users[0]) {
         var u = users[0];
-        DRIVER.name = ((u.firstName || '') + ' ' + (u.lastName || '')).trim() || u.name || DRIVER.name;
+        DRIVER.name = ((u.firstName || '') + ' ' + (u.lastName || '')).trim() || u.name;
+        document.getElementById('driverName').textContent = DRIVER.name;
+      }
+      done();
+    }, function() { done(); });
+  } else if (SESSION && !SESSION._driveApi) {
+    // Direct auth — get current user
+    rpc('Get', { typeName: 'User', search: { name: SESSION.userName } }, function(users) {
+      if (users && users[0]) {
+        var u = users[0];
+        DRIVER.id   = u.id;
+        DRIVER.name = ((u.firstName || '') + ' ' + (u.lastName || '')).trim() || u.name;
         document.getElementById('driverName').textContent = DRIVER.name;
       }
       done();
@@ -174,33 +303,39 @@ function loadDriveData(callback) {
   }
 
   // Vehicles
-  _api.call('Get', {
-    typeName: 'Device',
-    search: {}
-  }, function(devices) {
+  apiCall('Get', { typeName: 'Device', search: {} }, function(devices) {
+    document.getElementById('loadingVehicles').classList.add('hidden');
     if (devices && devices.length) {
       VEHICLES = devices
         .filter(function(d) { return d.id && d.id !== 'b0'; })
         .map(function(d) { return { id: d.id, name: d.name || d.id, plate: d.licensePlate || '' }; })
         .sort(function(a, b) { return a.name.localeCompare(b.name); });
-      document.getElementById('loadingVehicles').classList.add('hidden');
       renderVehicleList();
+    } else {
+      document.getElementById('vehicleList').innerHTML = '<p class="text-sm text-red-500 py-2">No vehicles found for this account.</p>';
     }
     done();
-  }, function() { done(); });
+  }, function(err) {
+    document.getElementById('loadingVehicles').classList.add('hidden');
+    // Session may have expired — clear and re-login
+    if (err && err.message && err.message.indexOf('nvalidated') !== -1) {
+      localStorage.removeItem(SESSION_KEY);
+      SESSION = null;
+      showLoginScreen();
+    } else {
+      document.getElementById('vehicleList').innerHTML = '<p class="text-sm text-red-500 py-2">Error loading vehicles: ' + (err && err.message ? err.message : JSON.stringify(err)) + '</p>';
+    }
+    done();
+  });
 
-  // Checklist template assigned to this driver
-  _api.call('Get', {
-    typeName: 'AddInData',
-    search: { addInId: ADDIN_ID }
-  }, function(results) {
-    var templates = results
+  // Checklist templates
+  apiCall('Get', { typeName: 'AddInData', search: { addInId: ADDIN_ID } }, function(results) {
+    var templates = (results || [])
       .map(function(r) { return r.details || null; })
       .filter(function(d) { return d && d.type === 'ChecklistTemplate'; });
 
-    var id = DRIVER.id;
     var tmpl = templates.find(function(t) {
-      return t.assignTo === 'driver' && Array.isArray(t.assigned) && t.assigned.indexOf(id) !== -1;
+      return t.assignTo === 'driver' && Array.isArray(t.assigned) && t.assigned.indexOf(DRIVER.id) !== -1;
     });
     if (!tmpl) tmpl = templates.find(function(t) { return t.assignTo === 'driver'; });
     if (!tmpl && templates.length) tmpl = templates[0];
@@ -223,7 +358,6 @@ function loadDriveData(callback) {
     }
     done();
   }, function() { done(); });
-}
 
 // ── Screen 0: vehicle select ──────────────────────────────────────────────────
 function renderVehicleList() {
@@ -435,16 +569,14 @@ function submitChecklist() {
   };
 
   // Save to AddInData
-  if (_api) {
-    _api.call('Add', {
-      typeName: 'AddInData',
-      entity: { addInId: ADDIN_ID, details: response }
-    }, function(id) {
-      console.log('Checklist response saved:', id);
-    }, function(err) {
-      console.error('Submit failed:', err);
-    });
-  }
+  apiCall('Add', {
+    typeName: 'AddInData',
+    entity: { addInId: ADDIN_ID, details: response }
+  }, function(id) {
+    console.log('Checklist response saved:', id);
+  }, function(err) {
+    console.error('Submit failed:', err);
+  });
 
   // Show success screen
   document.getElementById('successChecklistName').textContent = CHECKLIST.name;

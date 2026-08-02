@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Connecting…</title>
+<style>
+  body { font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #f1f5f9; }
+  .card { background: white; border-radius: 16px; padding: 2rem; text-align: center; box-shadow: 0 4px 24px rgba(0,0,0,0.1); max-width: 320px; }
+  .icon { font-size: 2.5rem; margin-bottom: 1rem; }
+  h2 { margin: 0 0 0.5rem; color: #1e293b; font-size: 1.1rem; }
+  p { margin: 0; color: #64748b; font-size: 0.85rem; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">✓</div>
+    <h2>Google account connected</h2>
+    <p>You can close this tab — the Checklist Builder will update automatically.</p>
+  </div>
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var code  = params.get('code');
+    var error = params.get('error');
+    if (error) {
+      document.querySelector('.icon').textContent = '✕';
+      document.querySelector('h2').textContent = 'Connection failed';
+      document.querySelector('p').textContent = error;
+    } else if (code) {
+      // Send code to opener via postMessage (works across origins)
+      if (window.opener) {
+        window.opener.postMessage({ type: 'GD_AUTH_CODE', code: code }, '*');
+      }
+      // Also write to localStorage as fallback for same-origin
+      localStorage.setItem('gd_oauth_code', code);
+      localStorage.setItem('gd_oauth_ts', Date.now().toString());
+      setTimeout(function() { window.close(); }, 1500);
+    } else {
+      document.querySelector('.icon').textContent = '?';
+      document.querySelector('h2').textContent = 'Nothing to do';
+      document.querySelector('p').textContent = 'No auth code found in URL.';
+    }
+  </script>
+</body>
+</html>

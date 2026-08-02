@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover">
+<title>Vehicle Check-In</title>
+</head>
+<body style="margin:0;padding:0;font-family:sans-serif;">
+
+<!-- Launch screen -->
+<div id="screen-launch" style="position:fixed;inset:0;background:linear-gradient(160deg,#0a1628 0%,#0d3a5c 40%,#0e6b7a 70%,#0a4a5e 100%);display:flex;flex-direction:column;align-items:center;justify-content:space-between;padding:0 2rem;">
+  <div style="flex:1;"></div>
+  <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;">
+    <h1 style="color:white;font-size:1.7rem;margin:0 0 0.6rem 0;">Vehicle Check-In</h1>
+    <p style="color:rgba(255,255,255,0.7);font-size:1rem;margin:0;">Tap below to begin your inspection</p>
+  </div>
+  <div style="flex:1;display:flex;align-items:center;justify-content:center;width:100%;">
+    <button onclick="launch()" style="width:100%;max-width:320px;padding:1.5rem;border-radius:1rem;border:none;font-size:1.2rem;font-weight:700;background:white;color:#0047BB;cursor:pointer;">
+      Launch Check-In
+    </button>
+  </div>
+</div>
+
+<!-- Iframe -->
+<div id="screen-iframe" style="position:fixed;inset:0;display:none;">
+  <iframe id="checkin-iframe" src="" style="width:100%;height:100%;border:none;display:block;" allow="camera *; microphone *; display-capture *"></iframe>
+</div>
+
+<script>
+const SESSION_KEY = 'myg_checkin_session';
+const LANDING_URL = 'https://bjornvandenwijngaert-tech.github.io/Driver-check-in-page/index_landingpage.html';
+var _api = null;
+
+if (typeof geotab === 'undefined') { var geotab = { addin: {} }; }
+geotab.addin.vehicleCheckIn = function() {
+  return {
+    initialize: function(api, state, callback) {
+      _api = api;
+      callback();
+    },
+    focus: function(api) { if (api) _api = api; },
+    blur:  function() {}
+  };
+};
+
+// Landing page requests a fresh session via postMessage — most reliable on iOS
+window.addEventListener('message', function(e) {
+  if (!e.data || e.data.type !== 'REQUEST_SESSION') return;
+  if (!_api) return;
+  _api.getSession(function(session) {
+    var data = {
+      server:    (session.path && session.path !== 'ThisServer') ? session.path : 'my.geotab.com',
+      database:  session.database,
+      sessionId: session.sessionId,
+      userName:  session.userName
+    };
+    var iframe = document.getElementById('checkin-iframe');
+    if (iframe && iframe.contentWindow) {
+      iframe.contentWindow.postMessage({ type: 'SESSION', data: data }, '*');
+    }
+  });
+});
+
+function launch() {
+  document.getElementById('screen-launch').style.display = 'none';
+  document.getElementById('screen-iframe').style.display = 'block';
+  document.getElementById('checkin-iframe').src = LANDING_URL;
+}
+</script>
+</body>
+</html>
