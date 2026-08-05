@@ -1413,10 +1413,11 @@ function expandedRow(r) {
   const items = r.items || [];
   const itemsHtml = items.length > 0
     ? items.map(item => {
-        const isFail = item.value === 'fail' || item.value === 'no';
-        const isPass = item.value === 'pass' || item.value === 'yes';
+        const isPicture = item.type === 'picture_required';
+        const isFail = !isPicture && (item.value === 'fail' || item.value === 'no');
+        const isPass = !isPicture && (item.value === 'pass' || item.value === 'yes');
         const colorClass = isFail ? 'item-fail' : isPass ? 'item-pass' : 'item-na';
-        const icon = isFail ? '✕' : isPass ? '✓' : '—';
+        const icon = isPicture ? '📷' : isFail ? '✕' : isPass ? '✓' : '—';
         const itemPhotoIds = item.gdItemPhotoIds && item.gdItemPhotoIds.length ? item.gdItemPhotoIds : [];
         const itemPhotoBtn = itemPhotoIds.length
           ? `<button onclick="openItemPhotoPopover(event,'${r.id}','${item.id}')"
@@ -1434,7 +1435,7 @@ function expandedRow(r) {
               ${item.note ? `<p class="text-xs text-slate-400 mt-0.5 italic">${item.note}</p>` : ''}
               ${itemPhotoBtn}
             </div>
-            <span class="text-xs text-slate-500 shrink-0 ${colorClass}">${item.value || '—'}</span>
+            <span class="text-xs text-slate-500 shrink-0 ${colorClass}">${isPicture ? (item.photoCount > 0 ? item.photoCount + ' photo' + (item.photoCount > 1 ? 's' : '') : '—') : (item.value || '—')}</span>
           </div>`;
       }).join('')
     : '<p class="text-xs text-slate-400 py-4 text-center">No items recorded</p>';
