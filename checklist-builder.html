@@ -22,6 +22,11 @@
   .slider:before { content:''; position:absolute; height:18px; width:18px; left:3px; bottom:3px; background:white; border-radius:50%; transition:.25s; }
   input:checked+.slider { background:#0047BB; }
   input:checked+.slider:before { transform:translateX(20px); }
+  /* Compact variant of .toggle for the item rows */
+  .toggle-sm { position:relative; width:34px; height:18px; display:inline-block; flex-shrink:0; }
+  .toggle-sm input { opacity:0; width:0; height:0; }
+  .toggle-sm .slider:before { height:14px; width:14px; left:2px; bottom:2px; }
+  .toggle-sm input:checked+.slider:before { transform:translateX(16px); }
   .sidebar-item.active { background:#eff6ff; border-color:#93c5fd; }
   .assign-btn { border:2px solid #e2e8f0; border-radius:12px; padding:12px; text-align:center; cursor:pointer; transition:all .2s; background:white; width:100%; }
   .assign-btn.active { border-color:#0047BB; background:#eff6ff; }
@@ -665,6 +670,18 @@ function renderItems() {
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z"/>
         </svg>
       </button>`;
+    // Photo required toggle — not offered on picture_required (already photo-only)
+    const photoOn  = item.photoRequired === true;
+    const photoTgl = item.type === 'picture_required' ? '' : `
+      <div class="flex items-center gap-1.5 shrink-0" title="Require a photo on this item whatever the answer">
+        <span class="text-[11px] text-slate-400 whitespace-nowrap">Photo required</span>
+        <label class="toggle toggle-sm">
+          <input type="checkbox" ${photoOn ? 'checked' : ''} onchange="updatePhotoRequired('${item.id}', this.checked)">
+          <span class="slider"></span>
+        </label>
+        <span id="photoReqWord-${item.id}" class="text-[11px] font-semibold w-6"
+              style="color:${photoOn ? '#0047BB' : '#94a3b8'};">${photoOn ? 'Yes' : 'No'}</span>
+      </div>`;
     return `
     <div class="flex items-center gap-3 bg-slate-50 border border-slate-100 rounded-xl px-3 py-2.5" data-item-idx="${idx}">
       <span onpointerdown="dragStart(event, ${idx})" title="Drag to reorder"
@@ -676,6 +693,7 @@ function renderItems() {
              class="flex-1 text-sm text-slate-700 bg-transparent focus:outline-none min-w-0"
              oninput="updateLabel('${item.id}', this.value)">
       ${saveBtn}
+      ${photoTgl}
       <select onchange="updateType('${item.id}', this.value)"
               class="text-xs text-slate-500 bg-white border border-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-blue-400 shrink-0">
         ${Object.entries(TYPE_LABEL).map(([v,l]) => `<option value="${v}" ${item.type===v?'selected':''}>${l}</option>`).join('')}
@@ -756,7 +774,19 @@ function removeItem(id) {
 }
 
 function updateLabel(id, val) { getActive().items.find(i=>i.id===id).label = val; renderApiPreview(); }
-function updateType(id, val)  { getActive().items.find(i=>i.id===id).type  = val; renderApiPreview(); }
+
+// Re-renders the row: switching to/from picture_required shows or hides the photo toggle
+function updateType(id, val)  { getActive().items.find(i=>i.id===id).type = val; renderItems(); renderApiPreview(); }
+
+function updatePhotoRequired(id, checked) {
+  getActive().items.find(i=>i.id===id).photoRequired = checked;
+  const word = document.getElementById('photoReqWord-' + id);
+  if (word) {
+    word.textContent   = checked ? 'Yes' : 'No';
+    word.style.color   = checked ? '#0047BB' : '#94a3b8';
+  }
+  renderApiPreview();
+}
 
 // ── Add Item Modal ────────────────────────────────────────────────────────────
 function openAddItemModal() {
@@ -877,7 +907,7 @@ function addSelectedItems() {
 
   // Add selected presets
   selectedPresets.forEach((type, label) => {
-    t.items.push({ id: 'i' + Date.now() + Math.random().toString(36).slice(2,6), label, type });
+    t.items.push({ id: 'i' + Date.now() + Math.random().toString(36).slice(2,6), label, type, photoRequired: false });
     added++;
   });
 
@@ -885,7 +915,7 @@ function addSelectedItems() {
   const customLabel = document.getElementById('customLabel').value.trim();
   if (customLabel) {
     const customType = document.getElementById('customType').value;
-    t.items.push({ id: 'i' + Date.now(), label: customLabel, type: customType });
+    t.items.push({ id: 'i' + Date.now(), label: customLabel, type: customType, photoRequired: false });
     added++;
     if (saveCustomFlag && !isInLibrary(customLabel)) {
       LIBRARY.items.push({ label: customLabel, type: customType });
@@ -962,7 +992,7 @@ function newChecklist() {
   const t = {
     id:'cl-'+Date.now(), name:'New Checklist', assignTo:'driver', assigned:[], requirePhotos:true,
     items:[
-      { id:'bodywork-'+Date.now(), label:'Bodywork check — any damage?', type:'pass_fail', isBodywork:true }
+      { id:'bodywork-'+Date.now(), label:'Bodywork check — any damage?', type:'pass_fail', isBodywork:true, photoRequired:false }
     ]
   };
   templates.unshift(t);
