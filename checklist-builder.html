@@ -93,13 +93,16 @@
         <svg class="w-5 h-5 text-green-500 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
         <div>
           <p class="text-sm font-semibold text-green-800">Google Drive connected</p>
-          <p id="driveConnectedEmail" class="text-xs text-green-600 mt-0.5"></p>
+          <p id="driveConnectedEmail" class="text-sm text-green-700 font-medium mt-0.5 break-all"></p>
         </div>
       </div>
       <div class="bg-slate-50 rounded-xl p-4 space-y-1">
         <p class="text-xs font-semibold text-slate-500 uppercase tracking-widest">Photos are saved to:</p>
         <p class="text-sm text-slate-700 font-mono">My Drive / Vehicle Check-In / ...</p>
       </div>
+      <button onclick="startGoogleAuth()" class="w-full py-2.5 rounded-xl text-sm font-medium border border-slate-300 text-slate-600 hover:bg-slate-50 transition-colors">
+        Connect a different Google account
+      </button>
       <button onclick="disconnectGoogleDrive()" class="w-full py-2.5 rounded-xl text-sm font-medium border border-red-200 text-red-500 hover:bg-red-50 transition-colors">
         Disconnect Google Drive
       </button>
@@ -1125,7 +1128,10 @@ async function startGoogleAuth() {
     + '&response_type=code'
     + '&scope='                 + encodeURIComponent(scope)
     + '&access_type=offline'
-    + '&prompt=consent'
+    // select_account forces the account chooser. Without it Google silently
+    // reuses whichever account the browser is already signed into, so a
+    // reconnect can land on the wrong Drive without ever asking.
+    + '&prompt=' + encodeURIComponent('consent select_account')
     + '&code_challenge='        + encodeURIComponent(challenge)
     + '&code_challenge_method=S256';
   window.open(url, '_blank');
