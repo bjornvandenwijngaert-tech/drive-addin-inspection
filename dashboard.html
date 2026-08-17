@@ -583,6 +583,39 @@ let RESPONSES = [];
 let filtered = [];
 let expandedId = null;
 
+// ── Lifecycle diagnostics ─────────────────────────────────────────────────────
+// The page can show an empty table for two completely different reasons: the
+// fetch came back empty, or MyGeotab never handed the page a session at all.
+// From the outside those look identical, so the page reports which one it is.
+const BUILD = '2026-08-17a';
+const _diag = { init: 0, focus: 0, blur: 0, api: false, recs: null, err: null, loadedAt: null };
+
+function diagStamp() {
+  const d = new Date();
+  return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2) + ':' + ('0' + d.getSeconds()).slice(-2);
+}
+
+function diagNote(event) {
+  if (event) console.log('[Add-in ' + diagStamp() + '] ' + event);
+  let el = document.getElementById('diagPill');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'diagPill';
+    el.title = 'Add-in lifecycle diagnostics — click to hide';
+    el.style.cssText = 'position:fixed;right:10px;bottom:10px;z-index:9999;font:10px/1.5 ui-monospace,Menlo,Consolas,monospace;'
+      + 'background:rgba(15,23,42,0.88);color:#e2e8f0;padding:5px 9px;border-radius:7px;cursor:pointer;letter-spacing:0.02em;';
+    el.onclick = function() { el.remove(); };
+    document.body.appendChild(el);
+  }
+  el.textContent = 'build ' + BUILD
+    + ' · init ' + (_diag.init ? '✓' + (_diag.init > 1 ? '×' + _diag.init : '') : '✗')
+    + ' · focus ' + _diag.focus
+    + ' · api ' + (_diag.api ? '✓' : '✗')
+    + ' · ' + (_diag.err ? 'ERR ' + _diag.err
+              : _diag.recs === null ? 'no fetch yet'
+              : _diag.recs + ' recs @' + _diag.loadedAt);
+}
+
 // ── MyGeotab add-in lifecycle ─────────────────────────────────────────────────
 if (typeof geotab === 'undefined') { var geotab = { addin: {} }; }
 // initialize() fires once per session. focus() fires every time the user
@@ -592,15 +625,17 @@ if (typeof geotab === 'undefined') { var geotab = { addin: {} }; }
 geotab.addin.vehicleChecklistDashboard = function() {
   return {
     initialize: function(api, state, callback) {
+      _diag.init++; diagNote('initialize');
       callback();                 // release MyGeotab before doing any work
       showDatabase(api, state);
       boot(api, true);
     },
     focus: function(api, state) {
+      _diag.focus++; diagNote('focus');
       showDatabase(api, state);
       boot(api, false);           // refetch only if the data has gone stale
     },
-    blur: function() {}
+    blur: function() { _diag.blur++; diagNote('blur'); }
   };
 };
 
@@ -624,7 +659,7 @@ var _lastLoadedAt = 0;
 var BOOT_STALE_MS = 30000;
 
 function boot(api, force) {
-  if (api) _api = api;
+  if (api) { _api = api; _diag.api = true; }
   if (!_api) return;
   if (_booting) return;
   if (!force && _lastLoadedAt && Date.now() - _lastLoadedAt < BOOT_STALE_MS) {
@@ -639,10 +674,13 @@ function boot(api, force) {
     _lastLoadedAt = Date.now();
     _booting = false;
     setLoading(false);
+    _diag.recs = (results || []).length; _diag.err = null; _diag.loadedAt = diagStamp();
+    diagNote('fetch ok — ' + _diag.recs + ' AddInData record(s), ' + RESPONSES.length + ' submission(s)');
   }, function(err) {
     console.error('AddInData fetch failed', err);
     _booting = false;
     setLoading(false);
+    _diag.err = (err && err.message) || String(err); diagNote('fetch failed');
     var text = document.getElementById('loadingStateText');
     if (text) text.textContent = 'Could not load submissions: ' + ((err && err.message) || err);
   });
@@ -4046,6 +4084,7 @@ function getRangeLabel() {
 // ── Init ──────────────────────────────────────────────────────────────────────
 renderCalendar();
 applyFilters(); // renders empty table until MyGeotab calls initialize()
+diagNote('page loaded');
 
 // The page used to reload itself if initialize() had not fired within 1.5s.
 // That reload happened inside the iframe without telling MyGeotab, which still
