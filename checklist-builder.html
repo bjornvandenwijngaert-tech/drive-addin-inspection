@@ -416,29 +416,81 @@ function diagNote(event) {
 // Keep the age ticking so a stale document is obvious at a glance.
 setInterval(function() { if (document.getElementById(DIAG_ID)) diagNote(); }, 1000);
 
+// Whatever failed, say so on the page. MyGeotab's own banner names only 'default.js'.
+function reportError(where, e) {
+  const msg = (e && e.message) || String(e);
+  _diag.err = where + ': ' + msg;
+  console.error('[Add-in ' + PAGE + '] ' + where + ' threw', e);
+  diagNote();
+  let box = document.getElementById(ERR_ID);
+  if (!box) {
+    box = document.createElement('div');
+    box.id = ERR_ID;
+    box.title = 'Click to copy, double-click to dismiss';
+    box.style.cssText = 'position:fixed;left:10px;bottom:10px;right:10px;max-width:900px;z-index:10000;'
+      + 'font:11px/1.6 ui-monospace,Menlo,Consolas,monospace;background:#7f1d1d;color:#fee2e2;'
+      + 'padding:8px 12px;border-radius:8px;white-space:pre-wrap;cursor:pointer;max-height:40vh;overflow:auto;';
+    box.ondblclick = function() { box.remove(); };
+    box.onclick = function() {
+      if (navigator.clipboard) navigator.clipboard.writeText(box.textContent);
+    };
+    document.body.appendChild(box);
+  }
+  box.textContent = PAGE + ' · ' + where + '\n' + msg + '\n\n'
+    + ((e && e.stack) ? e.stack : '(no stack)');
+}
+
+// Errors thrown out of a timer or an api callback never pass through the lifecycle
+// functions, so catch them at the window too. Both add-in pages share this document,
+// so each only claims errors raised while it is the page on screen.
+const ERR_ID = 'diagErr-' + PAGE;
+let _focused = false;
+window.addEventListener('error', function(ev) {
+  if (!_focused) return;
+  reportError('window.onerror', ev.error || new Error(ev.message));
+});
+window.addEventListener('unhandledrejection', function(ev) {
+  if (!_focused) return;
+  reportError('unhandled promise', ev.reason instanceof Error ? ev.reason : new Error(String(ev.reason)));
+});
+
+
 // initialize() fires once per session; focus() fires every time the user
 // navigates back to this page. focus() used to re-render from memory only, so a
 // template saved on another tab — or on this one before a reload — never showed
 // up without a browser refresh. Both entry points now go through boot().
+// An exception escaping any of these three gets reported by MyGeotab as
+// "Add-In 'default.js' threw an error", which names neither the page, the callback,
+// nor the line. Catch it here so the page can say what actually failed.
+function lifecycleGuard(name, fn) {
+  return function() {
+    try {
+      return fn.apply(null, arguments);
+    } catch (e) {
+      reportError(name, e);
+    }
+  };
+}
+
 geotab.addin.vehicleChecklistBuilder = function() {
   return {
-    initialize: function(api, state, callback) {
-      _diag.init++; diagNote('initialize');
+    initialize: lifecycleGuard('initialize', function(api, state, callback) {
+      _diag.init++; _focused = true; diagNote('initialize');
       callback();                 // release MyGeotab before doing any work
       boot(api, true);
-    },
-    focus: function(api, state) {
-      _diag.focus++; diagNote('focus');
+    }),
+    focus: lifecycleGuard('focus', function(api, state) {
+      _diag.focus++; _focused = true; diagNote('focus');
       boot(api, false);           // refetch only if what we hold has gone stale
-    },
-    blur: function() {
-      _diag.blur++;
+    }),
+    blur: lifecycleGuard('blur', function() {
+      _diag.blur++; _focused = false;
       console.log('[Add-in ' + diagStamp() + '] blur');
       // The pill is appended to document.body, which survives the page swap. Take
       // it down on the way out so the visible pill always belongs to the page in view.
       const pill = document.getElementById(DIAG_ID);
       if (pill) pill.remove();
-    }
+    })
   };
 };
 
@@ -1682,7 +1734,13 @@ setTimeout(function() {
 // so the functions they name have to be reachable there. These are the only names
 // this page publishes; everything else above stays private. Add to this list when
 // you add an inline handler, or the button will silently do nothing.
-Object.assign(window, {
+function publish(map) {
+  const taken = Object.keys(map).filter(n => n in window);
+  if (taken.length) console.warn('[Add-in ' + PAGE + '] overwriting existing globals: ' + taken.join(', '));
+  Object.assign(window, map);
+}
+
+publish({
     addSelectedItems: addSelectedItems, clearAllVisible: clearAllVisible,
     closeAddItemModal: closeAddItemModal, closeConflictPanel: closeConflictPanel,
     closeConflictPopover: closeConflictPopover, closeDriveSetup: closeDriveSetup,
