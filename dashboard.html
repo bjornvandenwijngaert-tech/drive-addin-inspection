@@ -587,7 +587,14 @@ let expandedId = null;
 // The page can show an empty table for two completely different reasons: the
 // fetch came back empty, or MyGeotab never handed the page a session at all.
 // From the outside those look identical, so the page reports which one it is.
-const BUILD = '2026-08-17a';
+const BUILD = '2026-08-17b';
+const PAGE  = 'REPORTS';
+// A fresh id per document load, and a clock since parse. If these change when you
+// switch pages the document was reloaded; if they carry on climbing, MyGeotab kept
+// the old document alive — which is the difference between a caching problem and a
+// lifecycle one, and it cannot be read off the build stamp alone.
+const LOAD_ID = Math.random().toString(36).slice(2, 6);
+const LOAD_AT = Date.now();
 const _diag = { init: 0, focus: 0, blur: 0, api: false, recs: null, err: null, loadedAt: null };
 
 function diagStamp() {
@@ -607,14 +614,19 @@ function diagNote(event) {
     el.onclick = function() { el.remove(); };
     document.body.appendChild(el);
   }
-  el.textContent = 'build ' + BUILD
+  el.textContent = PAGE + ' ' + LOAD_ID
+    + ' · ' + Math.round((Date.now() - LOAD_AT) / 1000) + 's old'
     + ' · init ' + (_diag.init ? '✓' + (_diag.init > 1 ? '×' + _diag.init : '') : '✗')
     + ' · focus ' + _diag.focus
     + ' · api ' + (_diag.api ? '✓' : '✗')
     + ' · ' + (_diag.err ? 'ERR ' + _diag.err
               : _diag.recs === null ? 'no fetch yet'
-              : _diag.recs + ' recs @' + _diag.loadedAt);
+              : _diag.recs + ' recs @' + _diag.loadedAt)
+    + ' · ' + BUILD;
 }
+
+// Keep the age ticking so a stale document is obvious at a glance.
+setInterval(function() { if (document.getElementById('diagPill')) diagNote(); }, 1000);
 
 // ── MyGeotab add-in lifecycle ─────────────────────────────────────────────────
 if (typeof geotab === 'undefined') { var geotab = { addin: {} }; }
