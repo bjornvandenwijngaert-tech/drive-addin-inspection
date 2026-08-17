@@ -374,8 +374,49 @@ if (!geotab.addin) geotab.addin = {};
 // An empty sidebar means either "the database has no checklists" or "MyGeotab
 // never handed this page a session". Those look identical on screen, so the page
 // reports which one actually happened.
-const PAGE  = 'BUILDER';   // names this page in console traces and error reports
-const BUILD = '2026-08-17c';
+const PAGE       = 'BUILDER';            // names this page in console traces and error reports
+const PAGE_LABEL = 'Checklist Builder';   // what the customer calls it
+const BUILD      = '2026-08-17d';
+
+const ERR_ID = 'diagErr-' + PAGE;
+let _focused = false;
+let _errCount = 0;
+
+// ── Re-entry teardown ─────────────────────────────────────────────────────────
+// MyGeotab re-injects and re-runs this entire script every time the page is
+// opened, so a second visit does not replace the first run — it runs alongside
+// it. The first closure stays alive with its document and window listeners still
+// attached, and its `_focused` is stuck true forever, because blur() only ever
+// reaches the most recently registered add-in object. Those orphans then fire on
+// pages they know nothing about: a keydown handler reaching for an element that
+// belonged to a page the user has left, and an error panel painting itself over
+// whatever happens to be on screen. Dispose the previous run before installing
+// this one, and route every long-lived listener through onDoc/onWin so it is
+// registered and unregistered in one place.
+const INSTANCE_KEY = '__checkinInstance_' + PAGE;
+if (window[INSTANCE_KEY]) {
+  try { window[INSTANCE_KEY].dispose(); }
+  catch (e) { console.warn('[Add-in ' + PAGE + '] previous instance teardown failed', e); }
+}
+
+const _disposers = [];
+function onDoc(type, fn, opts) {
+  document.addEventListener(type, fn, opts);
+  _disposers.push(function() { document.removeEventListener(type, fn, opts); });
+}
+function onWin(type, fn, opts) {
+  window.addEventListener(type, fn, opts);
+  _disposers.push(function() { window.removeEventListener(type, fn, opts); });
+}
+
+window[INSTANCE_KEY] = {
+  dispose: function() {
+    _focused = false;
+    _disposers.splice(0).forEach(function(off) { try { off(); } catch (e) {} });
+    const stale = document.getElementById(ERR_ID);
+    if (stale) stale.remove();
+  }
+};
 
 // Console-only trace. The on-screen pill came out once the shared-scope bug was
 // fixed; these lines cost nothing, are invisible to the user, and are the first
@@ -386,38 +427,117 @@ function logNote(event) {
   console.log('[Add-in ' + PAGE + ' ' + t + '] ' + event);
 }
 
-// Whatever failed, say so on the page. MyGeotab's own banner names only 'default.js'.
+// Whatever failed, say so on the page — MyGeotab's own banner names only
+// 'default.js'. The person reading this is a fleet manager, so it leads with a
+// sentence they can act on and keeps the stack behind a toggle. Dismiss is a real
+// button: the first version closed on double-click, which nobody discovers, and a
+// customer was left looking at an error they had no way to clear.
 function reportError(where, e) {
-  const msg = (e && e.message) || String(e);
+  const msg    = (e && e.message) || String(e);
+  const detail = PAGE + ' · ' + where + '\n' + msg + '\n\n' + ((e && e.stack) ? e.stack : '(no stack)');
   console.error('[Add-in ' + PAGE + '] ' + where + ' threw', e);
+  _errCount++;
+
   let box = document.getElementById(ERR_ID);
+
   if (!box) {
     box = document.createElement('div');
     box.id = ERR_ID;
-    box.title = 'Click to copy, double-click to dismiss';
-    box.style.cssText = 'position:fixed;left:10px;bottom:10px;right:10px;max-width:900px;z-index:10000;'
-      + 'font:11px/1.6 ui-monospace,Menlo,Consolas,monospace;background:#7f1d1d;color:#fee2e2;'
-      + 'padding:8px 12px;border-radius:8px;white-space:pre-wrap;cursor:pointer;max-height:40vh;overflow:auto;';
-    box.ondblclick = function() { box.remove(); };
-    box.onclick = function() {
-      if (navigator.clipboard) navigator.clipboard.writeText(box.textContent);
+    // Fixed to the viewport and above everything. box-sizing matters: with
+    // left+right+padding and the default content-box the panel overflows the
+    // window and the right-hand edge gets cut off.
+    box.style.cssText = 'position:fixed;left:12px;right:12px;bottom:12px;margin:0 auto;max-width:900px;'
+      + 'box-sizing:border-box;z-index:2147483000;background:#7f1d1d;color:#fee2e2;border-radius:10px;'
+      + 'box-shadow:0 8px 24px rgba(0,0,0,.35);padding:12px 14px;max-height:45vh;overflow:auto;'
+      + 'font:13px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;';
+
+    function mkBtn(label) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.style.cssText = 'background:rgba(255,255,255,.15);color:#fee2e2;border:1px solid rgba(255,255,255,.35);'
+        + 'border-radius:6px;padding:5px 10px;cursor:pointer;'
+        + 'font:12px/1 system-ui,-apple-system,"Segoe UI",sans-serif;';
+      return b;
+    }
+
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:flex-start;gap:12px;';
+
+    const text = document.createElement('div');
+    text.style.cssText = 'flex:1 1 auto;min-width:0;';
+
+    const head = document.createElement('div');
+    head.setAttribute('data-role', 'head');
+    head.style.cssText = 'font-weight:600;margin-bottom:2px;';
+
+    const sub = document.createElement('div');
+    sub.style.cssText = 'opacity:.92;';
+    sub.textContent = 'The ' + PAGE_LABEL + ' page hit an error and may not be showing everything. '
+      + 'Reloading the page usually clears it. If it keeps happening, copy the details below '
+      + 'and send them to your administrator.';
+
+    const pre = document.createElement('pre');
+    pre.setAttribute('data-role', 'detail');
+    pre.style.cssText = 'display:none;margin:10px 0 0;padding:8px;background:rgba(0,0,0,.25);'
+      + 'border-radius:6px;white-space:pre-wrap;word-break:break-word;overflow-x:auto;'
+      + 'font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;';
+
+    const toggle = mkBtn('Show technical details');
+    toggle.onclick = function() {
+      const opening = pre.style.display === 'none';
+      pre.style.display = opening ? 'block' : 'none';
+      toggle.textContent = opening ? 'Hide technical details' : 'Show technical details';
     };
+
+    const copy = mkBtn('Copy details');
+    copy.onclick = function() {
+      if (!navigator.clipboard) return;
+      navigator.clipboard.writeText(pre.textContent).then(function() {
+        copy.textContent = 'Copied';
+        setTimeout(function() { copy.textContent = 'Copy details'; }, 1500);
+      });
+    };
+
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.textContent = '✕';
+    close.title = 'Dismiss';
+    close.setAttribute('aria-label', 'Dismiss');
+    close.style.cssText = 'flex:0 0 auto;background:transparent;color:#fee2e2;border:0;font-size:18px;'
+      + 'line-height:1;cursor:pointer;padding:0 2px;opacity:.85;';
+    close.onclick = function() { box.remove(); };
+
+    const actions = document.createElement('div');
+    actions.style.cssText = 'margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;';
+    actions.appendChild(toggle);
+    actions.appendChild(copy);
+
+    text.appendChild(head);
+    text.appendChild(sub);
+    text.appendChild(actions);
+    text.appendChild(pre);
+    row.appendChild(text);
+    row.appendChild(close);
+    box.appendChild(row);
     document.body.appendChild(box);
   }
-  box.textContent = PAGE + ' · ' + where + '\n' + msg + '\n\n'
-    + ((e && e.stack) ? e.stack : '(no stack)');
+
+  const head = box.querySelector('[data-role="head"]');
+  const pre  = box.querySelector('[data-role="detail"]');
+  if (head) head.textContent = 'Something went wrong on this page'
+    + (_errCount > 1 ? ' (' + _errCount + ' errors)' : '');
+  if (pre) pre.textContent = detail;
 }
 
 // Errors thrown out of a timer or an api callback never pass through the lifecycle
 // functions, so catch them at the window too. Both add-in pages share this document,
 // so each only claims errors raised while it is the page on screen.
-const ERR_ID = 'diagErr-' + PAGE;
-let _focused = false;
-window.addEventListener('error', function(ev) {
+onWin('error', function(ev) {
   if (!_focused) return;
   reportError('window.onerror', ev.error || new Error(ev.message));
 });
-window.addEventListener('unhandledrejection', function(ev) {
+onWin('unhandledrejection', function(ev) {
   if (!_focused) return;
   reportError('unhandled promise', ev.reason instanceof Error ? ev.reason : new Error(String(ev.reason)));
 });
@@ -1354,12 +1474,22 @@ function startListeningForAuthCode() {
   }, 300000);
 }
 
+// The Drive auth code can land up to five minutes after the popup opened, by
+// which time the user may have navigated away and taken this page's markup with
+// them. Every write to the error line goes through here so a late reply reports
+// to the console instead of throwing on a missing element.
+function showAuthError(msg) {
+  const el = document.getElementById('driveAuthError');
+  if (!el) { console.warn('[Add-in ' + PAGE + '] auth error after page left: ' + msg); return; }
+  el.textContent = msg;
+  el.classList.remove('hidden');
+}
+
 function exchangeAuthCode(code) {
   const verifier = localStorage.getItem('gd_pkce_verifier');
   if (!verifier) {
     toast('⚠ PKCE verifier missing — please try connecting again.');
-    document.getElementById('driveAuthError').textContent = 'Auth error: verifier missing. Please try again.';
-    document.getElementById('driveAuthError').classList.remove('hidden');
+    showAuthError('Auth error: verifier missing. Please try again.');
     return;
   }
   localStorage.removeItem('gd_pkce_verifier');
@@ -1385,8 +1515,7 @@ function exchangeAuthCode(code) {
     if (data.error) {
       const msg = 'Google auth failed: ' + (data.error_description || data.error);
       toast(msg);
-      document.getElementById('driveAuthError').textContent = msg;
-      document.getElementById('driveAuthError').classList.remove('hidden');
+      showAuthError(msg);
       return;
     }
     toast('Token received — fetching account info…');
@@ -1410,8 +1539,7 @@ function exchangeAuthCode(code) {
     console.error('Token exchange failed:', err);
     const msg = 'Connection failed: ' + err.message;
     toast(msg);
-    document.getElementById('driveAuthError').textContent = msg;
-    document.getElementById('driveAuthError').classList.remove('hidden');
+    showAuthError(msg);
   });
 }
 
@@ -1498,14 +1626,18 @@ function showConflictPopover(event, id, type) {
   popover.style.left = Math.min(rect.left, window.innerWidth - 240) + 'px';
   popover.dataset.entityId = id;
   popover.classList.remove('hidden');
-  setTimeout(() => document.addEventListener('click', closePopoverOnce), 10);
+  setTimeout(() => onDoc('click', closePopoverOnce), 10);
 }
 
 function closeConflictPopover() {
-  document.getElementById('conflictPopover').classList.add('hidden');
+  const popover = document.getElementById('conflictPopover');
+  if (popover) popover.classList.add('hidden');
   document.removeEventListener('click', closePopoverOnce);
 }
 
+// Sits on the document while the popover is open, so it outlives the page if
+// MyGeotab swaps it out mid-popover. closeConflictPopover unhooks it either way,
+// and tolerates the markup already being gone.
 function closePopoverOnce() {
   closeConflictPopover();
 }
