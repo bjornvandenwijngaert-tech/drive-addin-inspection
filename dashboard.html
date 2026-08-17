@@ -255,7 +255,15 @@
           <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
           <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
         </svg>
-        <p class="text-sm">Loading submissions…</p>
+        <p id="loadingStateText" class="text-sm">Loading submissions…</p>
+      </div>
+
+      <!-- Shown only if MyGeotab never hands over an API object. The page used to
+           reload itself here, which broke the bridge more often than it fixed it. -->
+      <div id="bridgeWaitState" class="hidden bg-white rounded-2xl py-16 text-center mb-5" style="box-shadow:0 1px 3px rgba(0,0,0,0.07),0 4px 14px rgba(0,0,0,0.05);">
+        <p class="text-sm text-slate-500">Waiting for MyGeotab…</p>
+        <p class="text-xs text-slate-400 mt-1">The page has not been handed a session yet.</p>
+        <button onclick="window.location.reload()" class="mt-4 text-xs font-semibold text-white bg-[#0047BB] rounded-lg px-4 py-2">Reload</button>
       </div>
 
       <!-- Table -->
@@ -577,53 +585,86 @@ let expandedId = null;
 
 // ── MyGeotab add-in lifecycle ─────────────────────────────────────────────────
 if (typeof geotab === 'undefined') { var geotab = { addin: {} }; }
+// initialize() fires once per session. focus() fires every time the user
+// navigates back to this page, and used to reload only part of the data, which
+// is why switching between the two add-in pages showed stale or empty tables.
+// Both now go through boot(), so a return visit always shows current data.
 geotab.addin.vehicleChecklistDashboard = function() {
   return {
     initialize: function(api, state, callback) {
-      _api = api;
-      if (state && state.database) {
-        document.getElementById('dbBadge').textContent = state.database;
-      } else {
-        api.getSession(function(session) {
-          if (session && session.database) document.getElementById('dbBadge').textContent = session.database;
-        });
-      }
-      callback();
-      loadData();
-      loadGdConfig(null);
-      loadIssueRecords();
+      callback();                 // release MyGeotab before doing any work
+      showDatabase(api, state);
+      boot(api, true);
     },
-    focus: function(api, state) { _api = api; loadData(); loadGdConfig(null); },
+    focus: function(api, state) {
+      showDatabase(api, state);
+      boot(api, false);           // refetch only if the data has gone stale
+    },
     blur: function() {}
   };
 };
 
-// ── Data loading ──────────────────────────────────────────────────────────────
-function loadData() {
+function showDatabase(api, state) {
+  var badge = document.getElementById('dbBadge');
+  if (!badge) return;
+  if (state && state.database) { badge.textContent = state.database; return; }
+  if (badge.textContent && badge.textContent !== '—') return;
+  if (api && api.getSession) {
+    api.getSession(function(session) {
+      if (session && session.database) badge.textContent = session.database;
+    });
+  }
+}
+
+// One fetch feeds submissions, issues and the Drive config. They used to be
+// three separate Get calls for the identical AddInData set, so every focus
+// pulled the whole table three times over.
+var _booting      = false;
+var _lastLoadedAt = 0;
+var BOOT_STALE_MS = 30000;
+
+function boot(api, force) {
+  if (api) _api = api;
+  if (!_api) return;
+  if (_booting) return;
+  if (!force && _lastLoadedAt && Date.now() - _lastLoadedAt < BOOT_STALE_MS) {
+    applyFilters();               // fresh enough — just repaint
+    return;
+  }
+  _booting = true;
+  hideBridgeWait();
   setLoading(true);
-  _api.call('Get', {
-    typeName: 'AddInData',
-    search: { addInId: ADDIN_ID }
-  }, function(results) {
-    RESPONSES = results
-      .map(function(r) {
-        var d = r.details || null;
-        if (d && d.type === 'ChecklistResponse') {
-          d._addInDataId = r.id;
-          return d;
-        }
-        return null;
-      })
-      .filter(Boolean)
-      .sort(function(a, b) { return new Date(b.submittedAt) - new Date(a.submittedAt); });
-    buildFilterOptions();
-    applyFilters(); // renderKPIs + renderKpiChart called inside applyFilters
-    checkRetention();
+  _api.call('Get', { typeName: 'AddInData', search: { addInId: ADDIN_ID } }, function(results) {
+    applyAddInData(results || []);
+    _lastLoadedAt = Date.now();
+    _booting = false;
     setLoading(false);
   }, function(err) {
     console.error('AddInData fetch failed', err);
+    _booting = false;
     setLoading(false);
+    var text = document.getElementById('loadingStateText');
+    if (text) text.textContent = 'Could not load submissions: ' + ((err && err.message) || err);
   });
+}
+
+function applyAddInData(results) {
+  RESPONSES = [];
+  ISSUE_RECORDS = [];
+  var cfg = null;
+  results.forEach(function(r) {
+    var d = r.details;
+    if (!d) return;
+    if (d.type === 'ChecklistResponse')      { d._addInDataId = r.id; RESPONSES.push(d); }
+    else if (d.type === 'IssueStatus')       { ISSUE_RECORDS.push(d); }
+    else if (d.type === 'GoogleDriveConfig' && !cfg) { cfg = d; }
+  });
+  RESPONSES.sort(function(a, b) { return new Date(b.submittedAt) - new Date(a.submittedAt); });
+  _gdConfig = cfg;
+  buildFilterOptions();
+  applyFilters();                 // renderKPIs + renderKpiChart run inside
+  checkRetention();
+  if (_gdConfig) loadStorageInfo();
 }
 
 function setLoading(on) {
@@ -1883,19 +1924,6 @@ function renderPhotoThumbs() {
 }
 
 var _gdConfig = null;
-
-function loadGdConfig(onDone) {
-  _api.call('Get', { typeName: 'AddInData', search: { addInId: ADDIN_ID } }, function(results) {
-    for (var i = 0; i < results.length; i++) {
-      if (results[i].details && results[i].details.type === 'GoogleDriveConfig') {
-        _gdConfig = results[i].details;
-        break;
-      }
-    }
-    if (_gdConfig) loadStorageInfo(); // load storage once config is confirmed
-    if (onDone) onDone();
-  }, function() { if (onDone) onDone(); });
-}
 
 function gdRefreshToken(onSuccess, onError) {
   if (!_gdConfig || !_gdConfig.refreshToken) { onError('No Google Drive config'); return; }
@@ -3374,14 +3402,6 @@ function submitRaiseIssue() {
   });
 }
 
-function loadIssueRecords() {
-  if (!_api) return;
-  _api.call('Get', { typeName: 'AddInData', search: { addInId: ADDIN_ID } }, function(results) {
-    ISSUE_RECORDS = (results || []).map(function(r) { return r.details; }).filter(function(d) { return d && d.type === 'IssueStatus'; });
-    renderKPIs(filtered.length ? filtered : RESPONSES);
-  }, function() {});
-}
-
 // Issue status config
 var ISSUE_STATUSES = [
   { key: 'flagged',      label: 'Flagged',      color: '#dc2626', bg: '#fee2e2' },
@@ -4027,13 +4047,22 @@ function getRangeLabel() {
 renderCalendar();
 applyFilters(); // renders empty table until MyGeotab calls initialize()
 
-// Auto-reload once if initialize() hasn't fired (MyGeotab cold-load behaviour)
-if (!sessionStorage.getItem('dash_reloaded')) {
-  sessionStorage.setItem('dash_reloaded', '1');
-  setTimeout(function() { if (!_api) window.location.reload(); }, 1500);
-} else {
-  sessionStorage.removeItem('dash_reloaded');
+// The page used to reload itself if initialize() had not fired within 1.5s.
+// That reload happened inside the iframe without telling MyGeotab, which still
+// held a handle to the old add-in object and had no reason to call initialize
+// again — so the page came back permanently empty and only a full browser
+// refresh recovered it. Say what is happening instead, and let the user decide.
+function hideBridgeWait() {
+  var el = document.getElementById('bridgeWaitState');
+  if (el) el.classList.add('hidden');
 }
+
+setTimeout(function() {
+  if (_api) return;
+  var el = document.getElementById('bridgeWaitState');
+  if (el) el.classList.remove('hidden');
+  console.warn('[Add-in] MyGeotab has not called initialize() after 3s');
+}, 3000);
 </script>
 </body>
 </html>
