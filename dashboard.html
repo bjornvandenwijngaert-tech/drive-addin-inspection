@@ -577,6 +577,16 @@
 </div>
 
 <script>
+// MyGeotab does not put add-in pages in an iframe. It fetches the HTML and injects
+// it into its own document, so every add-in page in the solution runs in ONE shared
+// global scope. Two pages declaring the same top-level `const` is a SyntaxError, and
+// a SyntaxError kills the whole block before its first statement — the second page
+// loaded would never register its add-in, never be handed an api, and sit there
+// empty until the browser was reloaded. Everything below is therefore closed over,
+// and the handful of names the inline markup calls are published deliberately at the
+// bottom of this file. Nothing else may leak.
+(function() {
+
 const ADDIN_ID = 'a1Z2QF2s8nkajnj2rcMUsPQ';
 let _api = null;
 let RESPONSES = [];
@@ -595,6 +605,7 @@ const PAGE  = 'REPORTS';
 // lifecycle one, and it cannot be read off the build stamp alone.
 const LOAD_ID = Math.random().toString(36).slice(2, 6);
 const LOAD_AT = Date.now();
+const DIAG_ID = 'diagPill-' + PAGE;   // both pages share one document, so the pill needs its own id
 const _diag = { init: 0, focus: 0, blur: 0, api: false, recs: null, err: null, loadedAt: null };
 
 function diagStamp() {
@@ -604,10 +615,10 @@ function diagStamp() {
 
 function diagNote(event) {
   if (event) console.log('[Add-in ' + diagStamp() + '] ' + event);
-  let el = document.getElementById('diagPill');
+  let el = document.getElementById(DIAG_ID);
   if (!el) {
     el = document.createElement('div');
-    el.id = 'diagPill';
+    el.id = DIAG_ID;
     el.title = 'Add-in lifecycle diagnostics — click to hide';
     el.style.cssText = 'position:fixed;right:10px;bottom:10px;z-index:9999;font:10px/1.5 ui-monospace,Menlo,Consolas,monospace;'
       + 'background:rgba(15,23,42,0.88);color:#e2e8f0;padding:5px 9px;border-radius:7px;cursor:pointer;letter-spacing:0.02em;';
@@ -626,10 +637,13 @@ function diagNote(event) {
 }
 
 // Keep the age ticking so a stale document is obvious at a glance.
-setInterval(function() { if (document.getElementById('diagPill')) diagNote(); }, 1000);
+setInterval(function() { if (document.getElementById(DIAG_ID)) diagNote(); }, 1000);
 
 // ── MyGeotab add-in lifecycle ─────────────────────────────────────────────────
-if (typeof geotab === 'undefined') { var geotab = { addin: {} }; }
+// Registration has to land on the host's global object, not on this closure, or
+// MyGeotab will never find it. The other add-in page shares this object.
+const geotab = window.geotab = window.geotab || {};
+if (!geotab.addin) geotab.addin = {};
 // initialize() fires once per session. focus() fires every time the user
 // navigates back to this page, and used to reload only part of the data, which
 // is why switching between the two add-in pages showed stale or empty tables.
@@ -647,7 +661,14 @@ geotab.addin.vehicleChecklistDashboard = function() {
       showDatabase(api, state);
       boot(api, false);           // refetch only if the data has gone stale
     },
-    blur: function() { _diag.blur++; diagNote('blur'); }
+    blur: function() {
+      _diag.blur++;
+      console.log('[Add-in ' + diagStamp() + '] blur');
+      // The pill is appended to document.body, which survives the page swap. Take
+      // it down on the way out so the visible pill always belongs to the page in view.
+      const pill = document.getElementById(DIAG_ID);
+      if (pill) pill.remove();
+    }
   };
 };
 
@@ -4114,6 +4135,46 @@ setTimeout(function() {
   if (el) el.classList.remove('hidden');
   console.warn('[Add-in] MyGeotab has not called initialize() after 3s');
 }, 3000);
+
+// ── Handlers the markup calls ─────────────────────────────────────────────────
+// Inline onclick/oninput attributes are evaluated against the host's global scope,
+// so the functions they name have to be reachable there. These are the only names
+// this page publishes; everything else above stays private. Add to this list when
+// you add an inline handler, or the button will silently do nothing.
+Object.assign(window, {
+    addIssueComment: addIssueComment, advanceIssue: advanceIssue,
+    applyCustomStorageRange: applyCustomStorageRange, applyFilters: applyFilters,
+    calClickDay: calClickDay, calNavArrow: calNavArrow, calNextMonth: calNextMonth,
+    calPrevMonth: calPrevMonth, clearFilters: clearFilters,
+    closeCompliancePanel: closeCompliancePanel, closeConfirmModal: closeConfirmModal,
+    closeExportConfirm: closeExportConfirm, closeIncidentsPanel: closeIncidentsPanel,
+    closeIssueExportModal: closeIssueExportModal, closeIssuesPanel: closeIssuesPanel,
+    closePassRatePanel: closePassRatePanel, closePhotoFullView: closePhotoFullView,
+    closePhotoPopover: closePhotoPopover, closePhotosPanel: closePhotosPanel,
+    closeRaiseIssueModal: closeRaiseIssueModal, closeStoragePanel: closeStoragePanel,
+    closeSubmissionsPanel: closeSubmissionsPanel,
+    confirmDeleteSubmission: confirmDeleteSubmission, confirmExportAll: confirmExportAll,
+    dismissIssue: dismissIssue, executeStorageAction: executeStorageAction,
+    exportArchive: exportArchive, exportIssues: exportIssues,
+    exportSubmissionPDF: exportSubmissionPDF, initiateStorage: initiateStorage,
+    nextPhoto: nextPhoto, openCompliancePanel: openCompliancePanel,
+    openIssueExportModal: openIssueExportModal, openItemPhotoPopover: openItemPhotoPopover,
+    openItemPhotoPopoverById: openItemPhotoPopoverById, openKpiPanel: openKpiPanel,
+    openPhotoFullView: openPhotoFullView, openPhotoPopover: openPhotoPopover,
+    openRaiseIssueModal: openRaiseIssueModal, openStoragePanel: openStoragePanel,
+    prevPhoto: prevPhoto, purgeOldRecords: purgeOldRecords,
+    renderCompliancePanel: renderCompliancePanel,
+    renderFailureFrequency: renderFailureFrequency, renderPassRatePanel: renderPassRatePanel,
+    renderSubmissionsPanel: renderSubmissionsPanel, runExportAll: runExportAll,
+    selectKpiTile: selectKpiTile, setIssueStatus: setIssueStatus, setPRFilter: setPRFilter,
+    setSubFilter: setSubFilter, setSubView: setSubView, stepCalMode: stepCalMode,
+    submitRaiseIssue: submitRaiseIssue, switchIssuesTab: switchIssuesTab,
+    toggleDismissed: toggleDismissed, togglePhotoDetail: togglePhotoDetail,
+    toggleRaiseSide: toggleRaiseSide, toggleResolved: toggleResolved, toggleRow: toggleRow,
+    updateConfirmBtn: updateConfirmBtn
+});
+
+})();
 </script>
 </body>
 </html>
