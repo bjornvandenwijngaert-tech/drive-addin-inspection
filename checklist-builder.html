@@ -215,10 +215,10 @@
       <div class="border-t border-slate-100 pt-4">
         <p class="text-sm font-semibold text-slate-700 mb-2">Trip type</p>
         <div class="flex gap-2">
-          <button id="tripBtn-na" onclick="setTripType('na')" class="flex-1 py-2 rounded-lg text-xs font-semibold border transition-all border-blue-500 bg-blue-600 text-white">Not applicable</button>
-          <button id="tripBtn-pre" onclick="setTripType('pre')" class="flex-1 py-2 rounded-lg text-xs font-semibold border transition-all border-slate-200 bg-white text-slate-500">Pre-trip</button>
-          <button id="tripBtn-post" onclick="setTripType('post')" class="flex-1 py-2 rounded-lg text-xs font-semibold border transition-all border-slate-200 bg-white text-slate-500">Post-trip</button>
-          <button id="tripBtn-any" onclick="setTripType('any')" class="flex-1 py-2 rounded-lg text-xs font-semibold border transition-all border-slate-200 bg-white text-slate-500">Driver selects</button>
+          <button id="tripBtn-na" onclick="chooseTripType('na')" class="flex-1 py-2 rounded-lg text-xs font-semibold border transition-all border-blue-500 bg-blue-600 text-white">Not applicable</button>
+          <button id="tripBtn-pre" onclick="chooseTripType('pre')" class="flex-1 py-2 rounded-lg text-xs font-semibold border transition-all border-slate-200 bg-white text-slate-500">Pre-trip</button>
+          <button id="tripBtn-post" onclick="chooseTripType('post')" class="flex-1 py-2 rounded-lg text-xs font-semibold border transition-all border-slate-200 bg-white text-slate-500">Post-trip</button>
+          <button id="tripBtn-any" onclick="chooseTripType('any')" class="flex-1 py-2 rounded-lg text-xs font-semibold border transition-all border-slate-200 bg-white text-slate-500">Driver selects</button>
         </div>
         <p class="text-xs text-slate-400 mt-2">"Not applicable" hides pre/post entirely — for fleets where the distinction doesn't matter. "Driver selects" asks the driver to tag each check as pre- or post-trip — one checklist covers both.</p>
       </div>
@@ -812,6 +812,14 @@ function setTripType(type) {
     btn.style.color          = active ? 'white'   : '#64748b';
     btn.style.borderColor    = active ? '#2563eb' : '#e2e8f0';
   });
+}
+
+// What the trip-type buttons call. Separate from setTripType because that one
+// also runs while a checklist is being loaded, before the assign list exists —
+// only a real click should redraw the conflict warnings.
+function chooseTripType(type) {
+  setTripType(type);
+  updateConflictIndicator();
 }
 
 // ── Assign type ───────────────────────────────────────────────────────────────
@@ -1615,23 +1623,52 @@ function disconnectGoogleDrive() {
 }
 
 // ── Conflict detection ────────────────────────────────────────────────────────
+// Two checklists on the same driver or vehicle only clash if they can both come
+// due on the same trip. A pre-trip and a post-trip never can, so that pairing is
+// not a conflict. Every other pairing is: 'na' has no trip type and so applies to
+// any trip, and 'any' lets the driver pick either, so both overlap pre and post
+// and each other. Missing tripType on older records reads as 'na'.
+const TRIP_LABEL = { na: 'Any time', pre: 'Pre-trip', post: 'Post-trip', any: 'Driver selects' };
+
+function tripTypesClash(a, b) {
+  const x = a || 'na', y = b || 'na';
+  return !((x === 'pre' && y === 'post') || (x === 'post' && y === 'pre'));
+}
+
 function getConflictsFor(id, type) {
-  return templates.filter(t => t.id !== activeId && t.assignTo === type && Array.isArray(t.assigned) && t.assigned.includes(id));
+  // Compares against the trip type currently selected in the editor, not the
+  // saved one, so the warning appears and clears as you switch Pre/Post.
+  return templates.filter(t =>
+    t.id !== activeId &&
+    t.assignTo === type &&
+    Array.isArray(t.assigned) && t.assigned.includes(id) &&
+    tripTypesClash(tripType, t.tripType));
 }
 
 function getAllConflicts() {
-  const conflicts = { driver: {}, asset: {} };
+  const buckets = { driver: {}, asset: {} };
   templates.forEach(t => {
     (t.assigned || []).forEach(id => {
       const type = t.assignTo === 'driver' ? 'driver' : 'asset';
-      if (!conflicts[type][id]) conflicts[type][id] = [];
-      conflicts[type][id].push({ templateId: t.id, name: t.name, addInDataId: t.addInDataId });
+      if (!buckets[type][id]) buckets[type][id] = [];
+      buckets[type][id].push({
+        templateId: t.id, name: t.name, addInDataId: t.addInDataId, tripType: t.tripType || 'na'
+      });
     });
   });
-  // Keep only those with more than one checklist
+
+  // Two checklists on one person is not itself a conflict — keep only the ones
+  // that clash with at least one other on the same person. A driver on a pre-trip
+  // and a post-trip drops out entirely; add a "driver selects" list and all three
+  // come back, because that one overlaps both.
+  const conflicts = { driver: {}, asset: {} };
   ['driver','asset'].forEach(type => {
-    Object.keys(conflicts[type]).forEach(id => {
-      if (conflicts[type][id].length < 2) delete conflicts[type][id];
+    Object.keys(buckets[type]).forEach(id => {
+      const list = buckets[type][id];
+      if (list.length < 2) return;
+      const involved = list.filter((a, i) =>
+        list.some((b, j) => i !== j && tripTypesClash(a.tripType, b.tripType)));
+      if (involved.length > 1) conflicts[type][id] = involved;
     });
   });
   return conflicts;
@@ -1661,7 +1698,8 @@ function showConflictPopover(event, id, type) {
   }
   const conflicts = getConflictsFor(id, type);
   document.getElementById('conflictPopoverList').innerHTML = conflicts.map(c =>
-    `<p class="text-sm text-slate-700 py-1 border-b border-slate-100 last:border-0">${escHtml(c.name)}</p>`
+    `<p class="text-sm text-slate-700 py-1 border-b border-slate-100 last:border-0">${escHtml(c.name)}
+       <span class="block text-[11px] text-slate-400">${TRIP_LABEL[c.tripType || 'na']}</span></p>`
   ).join('');
   const rect = event.target.getBoundingClientRect();
   popover.style.top = (rect.bottom + 6) + 'px';
@@ -1713,7 +1751,8 @@ function openConflictPanel() {
               <label class="flex items-center gap-3 cursor-pointer">
                 <input type="checkbox" checked class="w-4 h-4 accent-blue-600"
                   onchange="resolveConflict('${id}','${type}','${l.templateId}',this.checked)">
-                <span class="text-sm text-slate-700">${escHtml(l.name)}</span>
+                <span class="text-sm text-slate-700">${escHtml(l.name)}
+                  <span class="text-[11px] text-slate-400">· ${TRIP_LABEL[l.tripType || 'na']}</span></span>
               </label>`).join('')}
             <button onclick="saveConflictResolution('${id}','${type}')"
               class="mt-2 w-full text-xs bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 rounded-lg transition-colors">
@@ -1761,10 +1800,15 @@ function saveConflictResolution(entityId, type) {
   let remaining = affectedTemplates.length;
   affectedTemplates.forEach(t => {
     t.assigned = (t.assigned || []).filter(id => id !== entityId);
+    // Must carry tripType. This payload is written back in full, so leaving the
+    // field out silently reset the checklist to "Not applicable" — which would
+    // have turned a resolved conflict straight back into a flagged one.
     const payload = {
       type: 'ChecklistTemplate', id: t.id, name: t.name,
       assignTo: t.assignTo, assigned: t.assigned,
-      requirePhotos: t.requirePhotos, items: t.items,
+      requirePhotos: t.requirePhotos,
+      tripType: t.tripType || 'na',
+      items: t.items,
       updatedAt: new Date().toISOString()
     };
     _api.call('Set', {
@@ -1890,7 +1934,8 @@ publish({
     saveChecklist: saveChecklist, saveConflictResolution: saveConflictResolution,
     saveToLibrary: saveToLibrary, selectAllVisible: selectAllVisible,
     selectTemplate: selectTemplate, setAssignType: setAssignType, setModalTab: setModalTab,
-    setTripType: setTripType, showConflictPopover: showConflictPopover,
+    chooseTripType: chooseTripType, setTripType: setTripType,
+    showConflictPopover: showConflictPopover,
     startGoogleAuth: startGoogleAuth, toggleAssign: toggleAssign,
     toggleConflictEntry: toggleConflictEntry, toggleFavourite: toggleFavourite,
     toggleGroup: toggleGroup, togglePreset: togglePreset, toggleSaveCustom: toggleSaveCustom,
