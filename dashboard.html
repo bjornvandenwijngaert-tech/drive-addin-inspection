@@ -597,54 +597,22 @@ let expandedId = null;
 // The page can show an empty table for two completely different reasons: the
 // fetch came back empty, or MyGeotab never handed the page a session at all.
 // From the outside those look identical, so the page reports which one it is.
-const BUILD = '2026-08-17b';
-const PAGE  = 'REPORTS';
-// A fresh id per document load, and a clock since parse. If these change when you
-// switch pages the document was reloaded; if they carry on climbing, MyGeotab kept
-// the old document alive — which is the difference between a caching problem and a
-// lifecycle one, and it cannot be read off the build stamp alone.
-const LOAD_ID = Math.random().toString(36).slice(2, 6);
-const LOAD_AT = Date.now();
-const DIAG_ID = 'diagPill-' + PAGE;   // both pages share one document, so the pill needs its own id
-const _diag = { init: 0, focus: 0, blur: 0, api: false, recs: null, err: null, loadedAt: null };
+const PAGE  = 'REPORTS';   // names this page in console traces and error reports
+const BUILD = '2026-08-17c';
 
-function diagStamp() {
+// Console-only trace. The on-screen pill came out once the shared-scope bug was
+// fixed; these lines cost nothing, are invisible to the user, and are the first
+// thing to ask for when a database reports the page behaving oddly.
+function logNote(event) {
   const d = new Date();
-  return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2) + ':' + ('0' + d.getSeconds()).slice(-2);
+  const t = ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2) + ':' + ('0' + d.getSeconds()).slice(-2);
+  console.log('[Add-in ' + PAGE + ' ' + t + '] ' + event);
 }
-
-function diagNote(event) {
-  if (event) console.log('[Add-in ' + diagStamp() + '] ' + event);
-  let el = document.getElementById(DIAG_ID);
-  if (!el) {
-    el = document.createElement('div');
-    el.id = DIAG_ID;
-    el.title = 'Add-in lifecycle diagnostics — click to hide';
-    el.style.cssText = 'position:fixed;right:10px;bottom:10px;z-index:9999;font:10px/1.5 ui-monospace,Menlo,Consolas,monospace;'
-      + 'background:rgba(15,23,42,0.88);color:#e2e8f0;padding:5px 9px;border-radius:7px;cursor:pointer;letter-spacing:0.02em;';
-    el.onclick = function() { el.remove(); };
-    document.body.appendChild(el);
-  }
-  el.textContent = PAGE + ' ' + LOAD_ID
-    + ' · ' + Math.round((Date.now() - LOAD_AT) / 1000) + 's old'
-    + ' · init ' + (_diag.init ? '✓' + (_diag.init > 1 ? '×' + _diag.init : '') : '✗')
-    + ' · focus ' + _diag.focus
-    + ' · api ' + (_diag.api ? '✓' : '✗')
-    + ' · ' + (_diag.err ? 'ERR ' + _diag.err
-              : _diag.recs === null ? 'no fetch yet'
-              : _diag.recs + ' recs @' + _diag.loadedAt)
-    + ' · ' + BUILD;
-}
-
-// Keep the age ticking so a stale document is obvious at a glance.
-setInterval(function() { if (document.getElementById(DIAG_ID)) diagNote(); }, 1000);
 
 // Whatever failed, say so on the page. MyGeotab's own banner names only 'default.js'.
 function reportError(where, e) {
   const msg = (e && e.message) || String(e);
-  _diag.err = where + ': ' + msg;
   console.error('[Add-in ' + PAGE + '] ' + where + ' threw', e);
-  diagNote();
   let box = document.getElementById(ERR_ID);
   if (!box) {
     box = document.createElement('div');
@@ -702,23 +670,18 @@ function lifecycleGuard(name, fn) {
 geotab.addin.vehicleChecklistDashboard = function() {
   return {
     initialize: lifecycleGuard('initialize', function(api, state, callback) {
-      _diag.init++; _focused = true; diagNote('initialize');
+      _focused = true; logNote('initialize');
       callback();                 // release MyGeotab before doing any work
       showDatabase(api, state);
       boot(api, true);
     }),
     focus: lifecycleGuard('focus', function(api, state) {
-      _diag.focus++; _focused = true; diagNote('focus');
+      _focused = true; logNote('focus');
       showDatabase(api, state);
       boot(api, false);           // refetch only if the data has gone stale
     }),
     blur: lifecycleGuard('blur', function() {
-      _diag.blur++; _focused = false;
-      console.log('[Add-in ' + diagStamp() + '] blur');
-      // The pill is appended to document.body, which survives the page swap. Take
-      // it down on the way out so the visible pill always belongs to the page in view.
-      const pill = document.getElementById(DIAG_ID);
-      if (pill) pill.remove();
+      _focused = false; logNote('blur');
     })
   };
 };
@@ -743,7 +706,7 @@ var _lastLoadedAt = 0;
 var BOOT_STALE_MS = 30000;
 
 function boot(api, force) {
-  if (api) { _api = api; _diag.api = true; }
+  if (api) { _api = api; }
   if (!_api) return;
   if (_booting) return;
   if (!force && _lastLoadedAt && Date.now() - _lastLoadedAt < BOOT_STALE_MS) {
@@ -758,13 +721,12 @@ function boot(api, force) {
     _lastLoadedAt = Date.now();
     _booting = false;
     setLoading(false);
-    _diag.recs = (results || []).length; _diag.err = null; _diag.loadedAt = diagStamp();
-    diagNote('fetch ok — ' + _diag.recs + ' AddInData record(s), ' + RESPONSES.length + ' submission(s)');
+    logNote('fetch ok — ' + (results || []).length + ' AddInData record(s), ' + RESPONSES.length + ' submission(s)');
   }, function(err) {
     console.error('AddInData fetch failed', err);
     _booting = false;
     setLoading(false);
-    _diag.err = (err && err.message) || String(err); diagNote('fetch failed');
+    logNote('fetch failed — ' + ((err && err.message) || String(err)));
     var text = document.getElementById('loadingStateText');
     if (text) text.textContent = 'Could not load submissions: ' + ((err && err.message) || err);
   });
@@ -4168,7 +4130,7 @@ function getRangeLabel() {
 // ── Init ──────────────────────────────────────────────────────────────────────
 renderCalendar();
 applyFilters(); // renders empty table until MyGeotab calls initialize()
-diagNote('page loaded');
+logNote('page loaded, build ' + BUILD);
 
 // The page used to reload itself if initialize() had not fired within 1.5s.
 // That reload happened inside the iframe without telling MyGeotab, which still
