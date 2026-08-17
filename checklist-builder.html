@@ -16,17 +16,10 @@
     transition: box-shadow .15s, transform .15s;
   }
   .btn-primary-float:hover { box-shadow: 0 4px 14px rgba(0,71,187,0.38); transform: translateY(-1px); }
-  .toggle { position:relative; width:44px; height:24px; display:inline-block; }
-  .toggle input { opacity:0; width:0; height:0; }
-  .slider { position:absolute; cursor:pointer; inset:0; background:#cbd5e1; border-radius:24px; transition:.25s; }
-  .slider:before { content:''; position:absolute; height:18px; width:18px; left:3px; bottom:3px; background:white; border-radius:50%; transition:.25s; }
-  input:checked+.slider { background:#0047BB; }
-  input:checked+.slider:before { transform:translateX(20px); }
-  /* Compact variant of .toggle for the item rows */
-  .toggle-sm { position:relative; width:34px; height:18px; display:inline-block; flex-shrink:0; }
-  .toggle-sm input { opacity:0; width:0; height:0; }
-  .toggle-sm .slider:before { height:14px; width:14px; left:2px; bottom:2px; }
-  .toggle-sm input:checked+.slider:before { transform:translateX(16px); }
+  /* The .toggle/.slider switch CSS that used to live here was removed 2026-08-17.
+     MyGeotab injects this page into its own document, so those generic class names
+     collided with the portal's stylesheet and the switch rendered as a bare
+     checkbox. Switches are now built by switchHtml() from inline styles only. */
   .sidebar-item.active { background:#eff6ff; border-color:#93c5fd; }
   .assign-btn { border:2px solid #e2e8f0; border-radius:12px; padding:12px; text-align:center; cursor:pointer; transition:all .2s; background:white; width:100%; }
   .assign-btn.active { border-color:#0047BB; background:#eff6ff; }
@@ -210,10 +203,14 @@
           <p class="text-sm font-semibold text-slate-700">Require end-of-check photos</p>
           <p class="text-xs text-slate-400 mt-0.5">User must take 1 picture per side of vehicle before submitting</p>
         </div>
-        <label class="toggle ml-4">
-          <input type="checkbox" id="reqPhotos" checked>
-          <span class="slider"></span>
-        </label>
+        <button type="button" id="reqPhotos" role="switch" aria-checked="true" class="ml-4"
+                aria-label="Require end-of-check photos" onclick="switchToggle('reqPhotos')"
+                style="position:relative;flex-shrink:0;width:44px;height:24px;padding:0;border:0;
+                       border-radius:999px;cursor:pointer;background:#0047BB;transition:background .2s;
+                       -webkit-appearance:none;appearance:none;">
+          <span data-knob style="position:absolute;top:3px;left:23px;width:18px;height:18px;background:#fff;
+                       border-radius:50%;box-shadow:0 1px 2px rgba(0,0,0,.3);transition:left .2s;"></span>
+        </button>
       </div>
       <div class="border-t border-slate-100 pt-4">
         <p class="text-sm font-semibold text-slate-700 mb-2">Trip type</p>
@@ -795,7 +792,7 @@ function selectTemplate(id) {
   activeGroups = new Set();
   const searchEl = document.getElementById('assignSearch');
   if (searchEl) searchEl.value = '';
-  document.getElementById('reqPhotos').checked = t.requirePhotos;
+  switchSet('reqPhotos', t.requirePhotos !== false);
   setTripType(t.tripType || 'na');
   updateAssignButtons();
   renderAssignList();
@@ -964,10 +961,7 @@ function renderItems() {
     const photoTgl = item.type === 'picture_required' ? '' : `
       <div class="flex items-center gap-1.5 shrink-0" title="Require a photo on this item whatever the answer">
         <span class="text-[11px] text-slate-400 whitespace-nowrap">Photo required</span>
-        <label class="toggle toggle-sm">
-          <input type="checkbox" ${photoOn ? 'checked' : ''} onchange="updatePhotoRequired('${item.id}', this.checked)">
-          <span class="slider"></span>
-        </label>
+        ${switchHtml('photoReq-' + item.id, photoOn, "togglePhotoRequired('" + item.id + "')", 'Photo required')}
         <span id="photoReqWord-${item.id}" class="text-[11px] font-semibold w-6"
               style="color:${photoOn ? '#0047BB' : '#94a3b8'};">${photoOn ? 'Yes' : 'No'}</span>
       </div>`;
@@ -1067,12 +1061,60 @@ function updateLabel(id, val) { getActive().items.find(i=>i.id===id).label = val
 // Re-renders the row: switching to/from picture_required shows or hides the photo toggle
 function updateType(id, val)  { getActive().items.find(i=>i.id===id).type = val; renderItems(); renderApiPreview(); }
 
-function updatePhotoRequired(id, checked) {
-  getActive().items.find(i=>i.id===id).photoRequired = checked;
+// ── Sliding switches ──────────────────────────────────────────────────────────
+// Built entirely from inline styles, with no class names and no :before knob.
+// MyGeotab injects our markup into its own document, so its stylesheet is in play
+// on our elements: generic names like .toggle and .slider collide with the
+// portal's own, and a pseudo-element knob cannot be forced inline to win the
+// collision. The earlier class-based version lost that fight and fell back to a
+// bare browser checkbox. Everything here is on the element itself, so nothing the
+// host defines can override it.
+const SW = { w: 34, h: 18, knob: 14, pad: 2, on: '#0047BB', off: '#cbd5e1' };
+
+function switchHtml(id, on, onclickJs, label) {
+  const x = on ? (SW.w - SW.knob - SW.pad) : SW.pad;
+  return `<button type="button" id="${id}" role="switch" aria-checked="${on}" aria-label="${escHtml(label)}"
+    onclick="${onclickJs}"
+    style="position:relative;flex-shrink:0;width:${SW.w}px;height:${SW.h}px;padding:0;border:0;
+           border-radius:999px;cursor:pointer;background:${on ? SW.on : SW.off};
+           transition:background .2s;-webkit-appearance:none;appearance:none;">
+    <span data-knob style="position:absolute;top:${SW.pad}px;left:${x}px;width:${SW.knob}px;height:${SW.knob}px;
+           background:#fff;border-radius:50%;box-shadow:0 1px 2px rgba(0,0,0,.3);transition:left .2s;"></span>
+  </button>`;
+}
+
+// Repaints a switch in place. Kept separate from the click handlers so a switch
+// can also be set from code (loading a saved checklist) without a full re-render.
+// Geometry is read back off the element rather than assumed, because the two
+// switches on this page are different sizes — the row one is compact.
+function switchSet(id, on) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.setAttribute('aria-checked', String(on));
+  el.style.background = on ? SW.on : SW.off;
+  const knob = el.querySelector('[data-knob]');
+  if (!knob) return;
+  const px = v => parseFloat(v) || 0;
+  const pad = px(knob.style.top);
+  knob.style.left = (on ? px(el.style.width) - px(knob.style.width) - pad : pad) + 'px';
+}
+
+function switchIsOn(id) {
+  const el = document.getElementById(id);
+  return !!el && el.getAttribute('aria-checked') === 'true';
+}
+
+function switchToggle(id) { switchSet(id, !switchIsOn(id)); }
+
+function togglePhotoRequired(id) {
+  const item = getActive().items.find(i => i.id === id);
+  if (!item) return;
+  item.photoRequired = !(item.photoRequired === true);
+  switchSet('photoReq-' + id, item.photoRequired);
   const word = document.getElementById('photoReqWord-' + id);
   if (word) {
-    word.textContent   = checked ? 'Yes' : 'No';
-    word.style.color   = checked ? '#0047BB' : '#94a3b8';
+    word.textContent = item.photoRequired ? 'Yes' : 'No';
+    word.style.color = item.photoRequired ? '#0047BB' : '#94a3b8';
   }
   renderApiPreview();
 }
@@ -1322,7 +1364,7 @@ function saveChecklist() {
   t.name = newName;
   t.assignTo = assignType;
   t.assigned = [...selected];
-  t.requirePhotos = document.getElementById('reqPhotos').checked;
+  t.requirePhotos = switchIsOn('reqPhotos');
   t.tripType = tripType;
   renderSidebar();
 
@@ -1852,8 +1894,8 @@ publish({
     startGoogleAuth: startGoogleAuth, toggleAssign: toggleAssign,
     toggleConflictEntry: toggleConflictEntry, toggleFavourite: toggleFavourite,
     toggleGroup: toggleGroup, togglePreset: togglePreset, toggleSaveCustom: toggleSaveCustom,
-    updateLabel: updateLabel, updatePhotoRequired: updatePhotoRequired,
-    updateType: updateType
+    switchToggle: switchToggle, togglePhotoRequired: togglePhotoRequired,
+    updateLabel: updateLabel, updateType: updateType
 });
 
 })();
