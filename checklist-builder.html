@@ -37,7 +37,7 @@
     <svg style="width:18px;height:18px;" fill="none" stroke="white" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
   </div>
   <span style="font-size:15px;font-weight:700;color:#1e293b;">Checklist Builder</span>
-  <span style="font-size:10px;color:#cbd5e1;">v1.7</span>
+  <span style="font-size:10px;color:#cbd5e1;">v1.8</span>
   <button id="driveBtn" onclick="openDriveSetup()" style="margin-left:auto;display:flex;align-items:center;gap:6px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:7px 14px;cursor:pointer;color:#64748b;font-size:12px;font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,0.06);">
     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z"/></svg>
     <span id="driveBtnLabel">Connect Storage</span>
@@ -1429,10 +1429,47 @@ function renderApiPreview() {}
 
 // ── Google Drive Integration ──────────────────────────────────────────────────
 const GD_CLIENT_ID     = '1079509518058-aicdrp0e2i9o19dogatjim2lajpufsid.apps.googleusercontent.com';
-const GD_CLIENT_SECRET = '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';
+// This page is public, so the client secret cannot live in it. The broker holds the
+// secret and only answers callers who prove they are signed into this database.
+// Source and deploy notes: ../../token-broker/
+const GD_TOKEN_BROKER  = 'https://script.google.com/macros/s/AKfycbwN9vEkp7GS4FCbX2zfdQ047jS1YXdFihm2VY05geGnk3dE1I-4z6HBXIzofEZSRyCL/exec';
 const GD_SCOPES = 'https://www.googleapis.com/auth/drive.file';
 const GD_CONFIG_TYPE = 'GoogleDriveConfig';
 let GD_CONFIG = null; // { accessToken, refreshToken, email, expiresAt }
+
+// The broker will not mint a token without proof the caller is signed into this
+// database, so every call carries the MyGeotab session. Cached because getSession
+// is asynchronous and the session does not change while the page is open.
+var _gdSession = null;
+
+function gdWithSession(onReady, onError) {
+  if (_gdSession) { onReady(_gdSession); return; }
+  if (!_api || !_api.getSession) { onError('Not connected to MyGeotab'); return; }
+  _api.getSession(function(session, server) {
+    if (!session || !session.sessionId) { onError('No MyGeotab session'); return; }
+    _gdSession = {
+      // Same shape the launch page already uses to hand a session to the driver
+      // page: getSession reports the server as `path`, and says 'ThisServer' when
+      // the database lives on the one being talked to.
+      server:    (session.path && session.path !== 'ThisServer') ? session.path
+                 : (server || location.hostname),
+      database:  session.database,
+      userName:  session.userName,
+      sessionId: session.sessionId
+    };
+    onReady(_gdSession);
+  });
+}
+
+// Deliberately text/plain: that keeps this a CORS-simple request. Apps Script does
+// not answer preflight, so an application/json content type never reaches the broker.
+function gdBrokerFetch(body) {
+  return fetch(GD_TOKEN_BROKER, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(body)
+  }).then(function(r) { return r.json(); });
+}
 
 function openDriveSetup() {
   document.getElementById('driveModal').classList.remove('hidden');
@@ -1503,7 +1540,7 @@ async function startGoogleAuth(hintFieldId) {
     // one to use, and it prompts for that account if it is not already signed in.
     // consent is always sent because it is what guarantees a refresh token comes
     // back on a reconnect, and without one the Drive link dies at the next expiry.
-    + '&prompt=' + encodeURIComponent(_gdWantedEmail ? 'consent' : 'consent select_account')
+    + '&prompt=' + encodeURIComponent('consent select_account')
     + (_gdWantedEmail ? '&login_hint=' + encodeURIComponent(_gdWantedEmail) : '')
     + '&code_challenge='        + encodeURIComponent(challenge)
     + '&code_challenge_method=S256';
@@ -1578,21 +1615,25 @@ function exchangeAuthCode(code) {
 
   toast('Code received — exchanging with Google…');
 
-  const redirectUri = 'https://bjornvandenwijngaert-tech.github.io/drive-addin-inspection/oauth-callback.html';
+  gdWithSession(
+    function(session) { exchangeAuthCodeWithSession(code, verifier, session); },
+    function(err) {
+      const msg = 'Connection failed: ' + err;
+      toast(msg);
+      showAuthError(msg);
+    }
+  );
+}
 
-  fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      code:          code,
-      client_id:     GD_CLIENT_ID,
-      client_secret: GD_CLIENT_SECRET,
-      code_verifier: verifier,
-      redirect_uri:  redirectUri,
-      grant_type:    'authorization_code'
-    })
+function exchangeAuthCodeWithSession(code, verifier, session) {
+  // The redirect_uri is not sent: the broker holds its own copy and uses that, so a
+  // caller cannot talk it into completing a flow that came back somewhere else.
+  gdBrokerFetch({
+    action:       'exchange',
+    session:      session,
+    code:         code,
+    codeVerifier: verifier
   })
-  .then(function(r) { return r.json(); })
   .then(function(data) {
     if (data.error) {
       const msg = 'Google auth failed: ' + (data.error_description || data.error);
