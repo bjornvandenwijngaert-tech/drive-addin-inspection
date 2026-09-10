@@ -97,7 +97,7 @@
   </div>
   <span style="font-size:15px;font-weight:700;color:#1e293b;">Check-In Dashboard</span>
   <span id="dbBadge" style="font-size:11px;font-weight:600;background:#eff6ff;color:#1d4ed8;padding:2px 10px;border-radius:6px;border:1px solid #bfdbfe;">—</span>
-  <span style="font-size:10px;color:#cbd5e1;">v7.6</span>
+  <span style="font-size:10px;color:#cbd5e1;">v7.7</span>
   <button id="storageBtn" onclick="openStoragePanel()" style="margin-left:auto;display:flex;align-items:center;gap:8px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:7px 14px;cursor:pointer;color:#64748b;font-size:12px;font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,0.06);transition:box-shadow .15s;">
     <svg style="width:14px;height:14px;flex-shrink:0;" fill="none" stroke="#94a3b8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z"/></svg>
     <div style="display:flex;flex-direction:column;align-items:flex-start;gap:3px;">
@@ -793,12 +793,12 @@ geotab.addin.vehicleChecklistDashboard = function() {
       _focused = true; logNote('initialize');
       callback();                 // release MyGeotab before doing any work
       showDatabase(api, state);
-      boot(api, true);
+      boot(api, true, state);
     }),
     focus: lifecycleGuard('focus', function(api, state) {
       _focused = true; logNote('focus');
       showDatabase(api, state);
-      boot(api, false);           // refetch only if the data has gone stale
+      boot(api, false, state);    // refetch only if this database's data has gone stale
     }),
     blur: lifecycleGuard('blur', function() {
       _focused = false; logNote('blur');
@@ -810,7 +810,6 @@ function showDatabase(api, state) {
   var badge = document.getElementById('dbBadge');
   if (!badge) return;
   if (state && state.database) { badge.textContent = state.database; return; }
-  if (badge.textContent && badge.textContent !== '—') return;
   if (api && api.getSession) {
     api.getSession(function(session) {
       if (session && session.database) badge.textContent = session.database;
@@ -823,33 +822,62 @@ function showDatabase(api, state) {
 // pulled the whole table three times over.
 var _booting      = false;
 var _lastLoadedAt = 0;
+var _currentDatabaseKey = '';
 var BOOT_STALE_MS = 30000;
 
-function boot(api, force) {
+function resetDashboardDatabase(databaseKey) {
+  _currentDatabaseKey = databaseKey;
+  _lastLoadedAt = 0;
+  _booting = false;
+  RESPONSES = [];
+  filtered = [];
+  ISSUE_RECORDS = [];
+  _gdConfig = null;
+  _gdDashSession = null;
+  STORAGE_CACHE = null;
+  expandedId = null;
+}
+
+function boot(api, force, state) {
   if (api) { _api = api; }
   if (!_api) return;
-  if (_booting) return;
-  if (!force && _lastLoadedAt && Date.now() - _lastLoadedAt < BOOT_STALE_MS) {
-    applyFilters();               // fresh enough — just repaint
-    return;
+
+  function start(database) {
+    var databaseKey = String(database || '').toLowerCase();
+    if (!databaseKey) return;
+    if (_currentDatabaseKey !== databaseKey) resetDashboardDatabase(databaseKey);
+    if (_booting) return;
+    if (!force && _lastLoadedAt && Date.now() - _lastLoadedAt < BOOT_STALE_MS) {
+      applyFilters();
+      return;
+    }
+    _booting = true;
+    var requestDatabaseKey = databaseKey;
+    var requestApi = _api;
+    hideBridgeWait();
+    setLoading(true);
+    requestApi.call('Get', { typeName: 'AddInData', search: { addInId: ADDIN_ID } }, function(results) {
+      if (_currentDatabaseKey !== requestDatabaseKey) return;
+      applyAddInData(results || []);
+      _lastLoadedAt = Date.now();
+      _booting = false;
+      setLoading(false);
+      logNote('fetch ok — ' + (results || []).length + ' AddInData record(s), ' + RESPONSES.length + ' submission(s)');
+    }, function(err) {
+      if (_currentDatabaseKey !== requestDatabaseKey) return;
+      console.error('AddInData fetch failed', err);
+      _booting = false;
+      setLoading(false);
+      logNote('fetch failed — ' + ((err && err.message) || String(err)));
+      var text = document.getElementById('loadingStateText');
+      if (text) text.textContent = 'Could not load submissions: ' + ((err && err.message) || err);
+    });
   }
-  _booting = true;
-  hideBridgeWait();
-  setLoading(true);
-  _api.call('Get', { typeName: 'AddInData', search: { addInId: ADDIN_ID } }, function(results) {
-    applyAddInData(results || []);
-    _lastLoadedAt = Date.now();
-    _booting = false;
-    setLoading(false);
-    logNote('fetch ok — ' + (results || []).length + ' AddInData record(s), ' + RESPONSES.length + ' submission(s)');
-  }, function(err) {
-    console.error('AddInData fetch failed', err);
-    _booting = false;
-    setLoading(false);
-    logNote('fetch failed — ' + ((err && err.message) || String(err)));
-    var text = document.getElementById('loadingStateText');
-    if (text) text.textContent = 'Could not load submissions: ' + ((err && err.message) || err);
-  });
+
+  if (state && state.database) { start(state.database); return; }
+  if (_api.getSession) {
+    _api.getSession(function(session) { start(session && session.database); });
+  }
 }
 
 function applyAddInData(results) {
@@ -894,8 +922,10 @@ function getResponsePhotoEntries(response, includeNonReady) {
   if (manifestMode) {
     response.photoManifest.forEach(function(raw, idx) {
       var state = raw.state || ((raw.mediaFileId || raw.gdFileId) ? 'ready' : 'missing');
-      var storage = raw.mediaFileId ? 'media' : (raw.gdFileId ? 'drive' : 'none');
-      var fileId = raw.mediaFileId || raw.gdFileId || '';
+      var mediaReady = !!raw.mediaFileId && state === 'ready';
+      if (!mediaReady && raw.gdFileId) state = 'ready';
+      var storage = mediaReady ? 'media' : (raw.gdFileId ? 'drive' : (raw.mediaFileId ? 'media' : 'none'));
+      var fileId = storage === 'media' ? (raw.mediaFileId || '') : (raw.gdFileId || '');
       if (!includeMissing && state !== 'ready') return;
       if (!includeMissing && !fileId) return;
       entries.push({
@@ -906,6 +936,8 @@ function getResponsePhotoEntries(response, includeNonReady) {
         index: (typeof raw.index === 'number') ? raw.index : 0,
         storage: storage,
         fileId: fileId,
+        mediaFileId: raw.mediaFileId || '',
+        gdFileId: raw.gdFileId || '',
         state: state,
         error: raw.error || '',
         label: (raw.kind === 'item') ? findItemLabel(response, raw.itemId) : titleCaseSlot(raw.slot)
@@ -1028,6 +1060,12 @@ function getResponsePhotoEntries(response, includeNonReady) {
   return entries;
 }
 
+function isDriveArchiveRequired(response) {
+  if (typeof response.driveArchiveRequired === 'boolean') return response.driveArchiveRequired;
+  var match = String(response.clientBuild || '').match(/^v20\.(\d+)/);
+  return !!(match && parseInt(match[1], 10) >= 3);
+}
+
 function getResponsePhotoSummary(response) {
   var entries = getResponsePhotoEntries(response, true);
   var summary = {
@@ -1039,7 +1077,10 @@ function getResponsePhotoSummary(response) {
     walkaroundCount: 0,
     walkaroundRetrievableCount: 0,
     itemCount: 0,
-    itemRetrievableCount: 0
+    itemRetrievableCount: 0,
+    driveArchivedCount: 0,
+    driveArchivePendingCount: 0,
+    driveArchiveStatus: 'not-applicable'
   };
 
   entries.forEach(function(entry) {
@@ -1065,6 +1106,20 @@ function getResponsePhotoSummary(response) {
     if (typeof response.photoPendingCount === 'number') summary.pendingCount = Math.max(summary.pendingCount, response.photoPendingCount);
     if (typeof response.photoFailedCount === 'number') summary.failedCount = Math.max(summary.failedCount, response.photoFailedCount);
     if (typeof response.storedPhotoCount === 'number') summary.retrievableCount = Math.min(summary.capturedCount, Math.max(summary.retrievableCount, response.storedPhotoCount));
+    if (isDriveArchiveRequired(response)) {
+      if (response.photoManifest && response.photoManifest.length) {
+        summary.driveArchivedCount = response.photoManifest.filter(function(entry) { return !!entry.gdFileId; }).length;
+      } else {
+        var archivedIds = {};
+        (response.gdFileIds || []).forEach(function(id) { if (id) archivedIds[id] = true; });
+        (response.items || []).forEach(function(item) {
+          (item.gdItemPhotoIds || []).forEach(function(id) { if (id) archivedIds[id] = true; });
+        });
+        summary.driveArchivedCount = Object.keys(archivedIds).length;
+      }
+      summary.driveArchivePendingCount = Math.max(summary.capturedCount - summary.driveArchivedCount, 0);
+      summary.driveArchiveStatus = summary.driveArchivePendingCount === 0 ? 'complete' : 'pending';
+    }
   }
 
   return summary;
@@ -1903,7 +1958,17 @@ function expandedRow(r) {
     ? '<p class="text-xs text-slate-500 mt-2">Stored: ' + photoSummary.retrievableCount
       + ' · Pending: ' + photoSummary.pendingCount
       + ' · Missing/failed: ' + (photoSummary.failedCount + photoSummary.missingCount)
+      + (isDriveArchiveRequired(r) ? '<br>Drive archive: ' + photoSummary.driveArchivedCount + '/' + photoSummary.capturedCount : '')
       + '</p>'
+    : '';
+
+  const archiveRetryHtml = r.photoStorageVersion === 2
+      && isDriveArchiveRequired(r)
+      && photoSummary.driveArchivePendingCount > 0
+      && (r.photoManifest || []).some(function(entry) { return entry.mediaFileId && !entry.gdFileId; })
+    ? '<button onclick="retryDriveArchive(\'' + r.id + '\',this)" '
+      + 'class="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-800 text-sm font-semibold rounded-xl transition-colors">'
+      + 'Retry Drive archive (' + photoSummary.driveArchivePendingCount + ')</button>'
     : '';
 
   return `
@@ -1919,6 +1984,7 @@ function expandedRow(r) {
             ${photosHtml}
             ${photoStatusHtml}
             <div class="mt-5 flex flex-col gap-2">
+              ${archiveRetryHtml}
               <button onclick="exportSubmissionPDF('${r.id}')"
                 class="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-[#0047BB] hover:bg-blue-700 text-white text-sm font-semibold rounded-xl transition-colors">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
@@ -2499,7 +2565,12 @@ var _gdBrokerUrl = 'https://script.google.com/macros/s/AKfycbwN9vEkp7GS4FCbX2zfd
 var _gdDashSession = null;
 
 function gdDashSession(onReady, onError) {
-  if (_gdDashSession) { onReady(_gdDashSession); return; }
+  if (_gdDashSession && (!_currentDatabaseKey
+      || String(_gdDashSession.database || '').toLowerCase() === _currentDatabaseKey)) {
+    onReady(_gdDashSession);
+    return;
+  }
+  _gdDashSession = null;
   if (!_api || !_api.getSession) { onError('Not connected to MyGeotab'); return; }
   _api.getSession(function(session, server) {
     if (!session || !session.sessionId) { onError('No MyGeotab session'); return; }
@@ -2513,6 +2584,11 @@ function gdDashSession(onReady, onError) {
       userName:  session.userName,
       sessionId: session.sessionId
     };
+    if (_currentDatabaseKey && String(_gdDashSession.database || '').toLowerCase() !== _currentDatabaseKey) {
+      _gdDashSession = null;
+      onError('MyGeotab database changed');
+      return;
+    }
     onReady(_gdDashSession);
   });
 }
@@ -2562,6 +2638,245 @@ function gdDashBrokerFetch(body, attempt) {
       setTimeout(resolve, 750 * (attempt + 1));
     }).then(function() { return gdDashBrokerFetch(body, attempt + 1); });
   });
+}
+
+var _dashArchiveBusy = {};
+
+function dashArchiveFolderName(name) {
+  var out = String(name == null ? '' : name)
+    .replace(/[\x00-\x1F\x7F]/g, ' ')
+    .replace(/[\/\\]/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (out.length > 120) out = out.slice(0, 120).trim();
+  return out || 'Unnamed vehicle';
+}
+
+function dashArchiveEscapeQuery(value) {
+  return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+function dashArchiveEscapeAppProperty(value) {
+  return String(value).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
+function dashArchiveGetOrCreateFolder(token, name, parentId) {
+  var parentClause = parentId
+    ? ' and "' + dashArchiveEscapeQuery(parentId) + '" in parents'
+    : ' and "root" in parents';
+  var query = 'mimeType="application/vnd.google-apps.folder" and name="'
+    + dashArchiveEscapeQuery(name) + '" and trashed=false' + parentClause;
+  return fetch('https://www.googleapis.com/drive/v3/files?q=' + encodeURIComponent(query) + '&fields=files(id,name)', {
+    headers: { 'Authorization': 'Bearer ' + token },
+    cache: 'no-store'
+  })
+  .then(function(response) {
+    return response.json().then(function(data) {
+      if (!response.ok || data.error) throw new Error(data.error && data.error.message ? data.error.message : 'Drive folder lookup failed');
+      if (data.files && data.files.length) return data.files[0].id;
+      var metadata = { name: name, mimeType: 'application/vnd.google-apps.folder' };
+      if (parentId) metadata.parents = [parentId];
+      return fetch('https://www.googleapis.com/drive/v3/files', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify(metadata)
+      }).then(function(createResponse) {
+        return createResponse.json().then(function(created) {
+          if (!createResponse.ok || created.error || !created.id) {
+            throw new Error(created.error && created.error.message ? created.error.message : 'Drive folder creation failed');
+          }
+          return created.id;
+        });
+      });
+    });
+  });
+}
+
+function dashArchiveFindFile(token, archiveKey, folderId) {
+  var query = "appProperties has { key='checkinPhotoKey' and value='"
+    + dashArchiveEscapeAppProperty(archiveKey) + "' } and '"
+    + dashArchiveEscapeAppProperty(folderId) + "' in parents and trashed=false";
+  return fetch('https://www.googleapis.com/drive/v3/files?q=' + encodeURIComponent(query) + '&fields=files(id)', {
+    headers: { 'Authorization': 'Bearer ' + token },
+    cache: 'no-store'
+  }).then(function(response) {
+    return response.json().then(function(data) {
+      if (!response.ok || data.error) throw new Error(data.error && data.error.message ? data.error.message : 'Drive archive lookup failed');
+      return data.files && data.files[0] ? data.files[0].id : null;
+    });
+  });
+}
+
+function dashArchiveUploadBlob(token, blob, fileName, folderId, archiveKey) {
+  var boundary = 'checkin_archive_' + Date.now();
+  var metadata = JSON.stringify({
+    name: fileName,
+    parents: [folderId],
+    appProperties: { checkinPhotoKey: archiveKey }
+  });
+  var start = new TextEncoder().encode('--' + boundary + '\r\n'
+    + 'Content-Type: application/json; charset=UTF-8\r\n\r\n' + metadata + '\r\n'
+    + '--' + boundary + '\r\nContent-Type: image/jpeg\r\n\r\n');
+  var end = new TextEncoder().encode('\r\n--' + boundary + '--');
+  return fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+    method: 'POST',
+    headers: {
+      'Authorization': 'Bearer ' + token,
+      'Content-Type': 'multipart/related; boundary=' + boundary
+    },
+    body: new Blob([start, blob, end])
+  }).then(function(response) {
+    return response.json().then(function(data) {
+      if (!response.ok || data.error || !data.id) {
+        throw new Error(data.error && data.error.message ? data.error.message : 'Drive upload failed');
+      }
+      return data.id;
+    });
+  });
+}
+
+function dashArchiveDownloadMedia(mediaContext, mediaFileId) {
+  return fetch(buildMediaUrl(mediaContext, mediaFileId), { cache: 'no-store' })
+    .then(function(response) {
+      var contentType = response.headers.get('content-type') || '';
+      if (!response.ok) throw new Error('MediaFile download failed (HTTP ' + response.status + ')');
+      if (contentType && contentType.indexOf('image/') !== 0) throw new Error('MediaFile returned a non-image response');
+      return response.blob();
+    })
+    .then(function(blob) {
+      if (!blob || !blob.size) throw new Error('MediaFile returned an empty image');
+      return blob;
+    });
+}
+
+function dashArchiveGetResponse(addInDataId) {
+  return new Promise(function(resolve, reject) {
+    _api.call('Get', { typeName: 'AddInData', search: { id: addInDataId } }, function(results) {
+      var record = results && results[0];
+      if (!record || !record.details) { reject(new Error('Submission record no longer exists')); return; }
+      resolve(record);
+    }, reject);
+  });
+}
+
+function dashArchiveUpdateStatus(response) {
+  var manifest = response.photoManifest || [];
+  response.driveArchivedPhotoCount = manifest.filter(function(entry) { return !!entry.gdFileId; }).length;
+  response.driveArchiveStatus = response.driveArchivedPhotoCount >= (response.capturedPhotoCount || manifest.length)
+    ? 'complete' : 'pending';
+}
+
+function dashArchiveMergeDriveId(addInDataId, responseId, sourceEntry, driveFileId, attempt) {
+  attempt = attempt || 0;
+  return dashArchiveGetResponse(addInDataId).then(function(record) {
+    var details = record.details;
+    if (details.id !== responseId) throw new Error('Submission record changed during archive retry');
+    var entry = (details.photoManifest || []).find(function(item) { return item.key === sourceEntry.key; });
+    if (!entry) throw new Error('Photo manifest entry no longer exists');
+    var finalDriveId = entry.gdFileId || driveFileId;
+    entry.gdFileId = finalDriveId;
+
+    dashArchiveUpdateStatus(details);
+    if (JSON.stringify(details).length > 9500) {
+      var sizeError = new Error('Submission metadata is too large to update safely');
+      sizeError.noRetry = true;
+      throw sizeError;
+    }
+
+    return new Promise(function(resolve, reject) {
+      record.details = details;
+      _api.call('Set', {
+        typeName: 'AddInData',
+        entity: record
+      }, function() {
+        dashArchiveGetResponse(record.id).then(function(verifiedRecord) {
+          var verifiedDetails = verifiedRecord.details;
+          var verifiedEntry = (verifiedDetails.photoManifest || []).find(function(item) {
+            return item.key === sourceEntry.key;
+          });
+          if (!verifiedEntry || verifiedEntry.gdFileId !== finalDriveId) {
+            reject(new Error('Archive update conflicted with another writer'));
+            return;
+          }
+          verifiedDetails._addInDataId = verifiedRecord.id;
+          var index = RESPONSES.findIndex(function(item) { return item.id === responseId; });
+          if (index >= 0) RESPONSES[index] = verifiedDetails;
+          resolve(verifiedDetails);
+        }, reject);
+      }, reject);
+    });
+  }).catch(function(err) {
+    if (err && err.noRetry) throw err;
+    if (attempt >= 2) throw err;
+    return new Promise(function(resolve) { setTimeout(resolve, 300 * (attempt + 1)); })
+      .then(function() {
+        return dashArchiveMergeDriveId(addInDataId, responseId, sourceEntry, driveFileId, attempt + 1);
+      });
+  });
+}
+
+async function retryDriveArchive(responseId, button) {
+  if (_dashArchiveBusy[responseId]) return;
+  var response = RESPONSES.find(function(item) { return item.id === responseId; });
+  if (!response || !response._addInDataId) return;
+
+  _dashArchiveBusy[responseId] = true;
+  var originalText = button ? button.textContent : '';
+  if (button) { button.disabled = true; button.textContent = 'Checking storage…'; }
+
+  try {
+    if (!_gdConfig || !_gdConfig.refreshToken) throw new Error('Google Drive is not connected');
+    var latestRecord = await dashArchiveGetResponse(response._addInDataId);
+    response = latestRecord.details;
+    response._addInDataId = latestRecord.id;
+    var pending = (response.photoManifest || []).filter(function(entry) {
+      return entry.mediaFileId && !entry.gdFileId;
+    });
+    if (!pending.length) {
+      renderTable();
+      return;
+    }
+    var token = await new Promise(function(resolve, reject) { gdRefreshToken(resolve, reject); });
+    var mediaContext = await new Promise(function(resolve, reject) { getFreshMediaSession(resolve, reject); });
+
+    if (button) button.textContent = 'Preparing Drive folders…';
+    var rootId = await dashArchiveGetOrCreateFolder(token, 'Vehicle Check-In', null);
+    var dateId = await dashArchiveGetOrCreateFolder(token, response.submittedAt.slice(0, 10), rootId);
+    var vehicleId = await dashArchiveGetOrCreateFolder(token, dashArchiveFolderName(response.deviceName), dateId);
+    var submissionId = await dashArchiveGetOrCreateFolder(token, response.id, vehicleId);
+    var itemFolderId = null;
+
+    for (var i = 0; i < pending.length; i++) {
+      var entry = pending[i];
+      if (button) button.textContent = 'Archiving ' + (i + 1) + '/' + pending.length + '…';
+      var folderId = submissionId;
+      if (entry.kind === 'item') {
+        if (!itemFolderId) itemFolderId = await dashArchiveGetOrCreateFolder(token, 'item-photos', submissionId);
+        folderId = itemFolderId;
+      }
+      var fileName = entry.kind === 'item'
+        ? 'item_' + entry.itemId + '_photo' + ((entry.index || 0) + 1) + '.jpg'
+        : 'photo_' + ({ front: 1, left: 2, right: 3, rear: 4 }[entry.slot] || ((entry.index || 0) + 1)) + '.jpg';
+      var archiveKey = response.id + ':' + entry.key;
+      var driveFileId = await dashArchiveFindFile(token, archiveKey, folderId);
+      if (!driveFileId) {
+        var blob = await dashArchiveDownloadMedia(mediaContext, entry.mediaFileId);
+        driveFileId = await dashArchiveUploadBlob(token, blob, fileName, folderId, archiveKey);
+      }
+      response = await dashArchiveMergeDriveId(response._addInDataId, response.id, entry, driveFileId);
+    }
+
+    renderTable();
+    var summary = getResponsePhotoSummary(response);
+    alert((summary.driveArchivePendingCount === 0 ? 'Google Drive archive complete: ' : 'Google Drive archive partial: ')
+      + summary.driveArchivedCount + '/' + summary.capturedCount + ' photos.');
+  } catch (err) {
+    console.error('Drive archive retry failed', err);
+    alert('Drive archive retry failed. Photos remain stored in MyGeotab.\n\n' + (err && err.message ? err.message : String(err)));
+  } finally {
+    _dashArchiveBusy[responseId] = false;
+    if (button && button.isConnected) { button.disabled = false; button.textContent = originalText; }
+  }
 }
 
 function closePhotoPopover() {
@@ -3699,6 +4014,18 @@ function closeStoragePanel() {
   document.getElementById('storagePanel').style.display = 'none';
 }
 
+function getDriveFileIdsForResponse(response) {
+  var ids = {};
+  (response.gdFileIds || []).forEach(function(id) { if (id) ids[id] = true; });
+  (response.items || []).forEach(function(item) {
+    (item.gdItemPhotoIds || []).forEach(function(id) { if (id) ids[id] = true; });
+  });
+  (response.photoManifest || []).forEach(function(entry) {
+    if (entry.gdFileId) ids[entry.gdFileId] = true;
+  });
+  return Object.keys(ids);
+}
+
 function renderStoragePanel() {
   var body = document.getElementById('storagePanelBody');
   if (!body) return;
@@ -3710,11 +4037,11 @@ function renderStoragePanel() {
     { label: 'Older than 90 days', days: 90, color: '#dc2626', bg: '#fee2e2' },
   ];
 
-  // Group responses with GD photos by age
+  // Group responses with archived Drive photos by age.
   function getResponses(days) {
     var cutoff = new Date(now); cutoff.setDate(now.getDate() - days);
     return RESPONSES.filter(function(r) {
-      return new Date(r.submittedAt) < cutoff && r.gdFileIds && r.gdFileIds.length;
+      return new Date(r.submittedAt) < cutoff && getDriveFileIdsForResponse(r).length > 0;
     });
   }
 
@@ -3743,8 +4070,8 @@ function renderStoragePanel() {
   // Age buckets
   cutoffs.forEach(function(c) {
     var responses = getResponses(c.days);
-    var photoCount = responses.reduce(function(s, r) { return s + (r.gdFileIds ? r.gdFileIds.length : 0); }, 0);
-    var fileIds = responses.reduce(function(arr, r) { return arr.concat(r.gdFileIds || []); }, []);
+    var photoCount = responses.reduce(function(s, r) { return s + getDriveFileIdsForResponse(r).length; }, 0);
+    var fileIds = responses.reduce(function(arr, r) { return arr.concat(getDriveFileIdsForResponse(r)); }, []);
     var submissionIds = responses.map(function(r) { return r.id; });
 
     html += '<div style="background:white;border-radius:16px;padding:20px;margin-bottom:16px;border:2px solid ' + c.color + '20;">'
@@ -3793,10 +4120,10 @@ function applyCustomStorageRange() {
   var fromDate = new Date(from), toDate = new Date(to + 'T23:59:59');
   var responses = RESPONSES.filter(function(r) {
     var dt = new Date(r.submittedAt);
-    return dt >= fromDate && dt <= toDate && r.gdFileIds && r.gdFileIds.length;
+    return dt >= fromDate && dt <= toDate && getDriveFileIdsForResponse(r).length > 0;
   });
-  var photoCount = responses.reduce(function(s, r) { return s + (r.gdFileIds ? r.gdFileIds.length : 0); }, 0);
-  var fileIds = responses.reduce(function(arr, r) { return arr.concat(r.gdFileIds || []); }, []);
+  var photoCount = responses.reduce(function(s, r) { return s + getDriveFileIdsForResponse(r).length; }, 0);
+  var fileIds = responses.reduce(function(arr, r) { return arr.concat(getDriveFileIdsForResponse(r)); }, []);
   var submissionIds = responses.map(function(r) { return r.id; });
 
   if (!responses.length) { res.innerHTML = '<p style="color:#94a3b8;font-size:13px;text-align:center;padding:8px;">No photos found in this range.</p>'; return; }
@@ -3820,21 +4147,27 @@ async function initiateStorage(type, fileIds, submissionIds) {
     btn.disabled = true;
 
     try {
-      await gdRefreshToken(function(token) { if (_gdConfig) _gdConfig.accessToken = token; }, function() {});
-      var token = _gdConfig.accessToken;
+      var token = await new Promise(function(resolve, reject) { gdRefreshToken(resolve, reject); });
       var zip = new JSZip();
       var done = 0;
+      var failedDownloads = [];
 
       for (var i = 0; i < fileIds.length; i++) {
         try {
           var resp = await fetch('https://www.googleapis.com/drive/v3/files/' + fileIds[i] + '?alt=media', {
             headers: { 'Authorization': 'Bearer ' + token }
           });
+          if (!resp.ok) throw new Error('HTTP ' + resp.status);
           var blob = await resp.blob();
           zip.file('photo_' + (i+1) + '.jpg', blob);
-        } catch(e) {}
+        } catch(e) { failedDownloads.push(fileIds[i]); }
         done++;
         btn.textContent = 'Downloading ' + done + '/' + fileIds.length + '…';
+      }
+
+      if (failedDownloads.length) {
+        throw new Error(failedDownloads.length + ' of ' + fileIds.length
+          + ' photos could not be downloaded. Nothing has been deleted.');
       }
 
       var content = await zip.generateAsync({ type: 'blob' });
@@ -3888,33 +4221,87 @@ function updateConfirmBtn() {
   btn.style.opacity = (dlOk && phraseOk) ? '1' : '0.4';
 }
 
+function markOneDriveArchiveDeleted(responseId, deletedIds, attempt) {
+  attempt = attempt || 0;
+  var response = RESPONSES.find(function(item) { return item.id === responseId; });
+  if (!response || !response._addInDataId) return Promise.resolve();
+  var deleted = {};
+  deletedIds.forEach(function(id) { deleted[id] = true; });
+
+  return dashArchiveGetResponse(response._addInDataId).then(function(record) {
+    var details = record.details;
+    details.gdFileIds = (details.gdFileIds || []).filter(function(id) { return !deleted[id]; });
+    (details.items || []).forEach(function(item) {
+      item.gdItemPhotoIds = (item.gdItemPhotoIds || []).filter(function(id) { return !deleted[id]; });
+    });
+    (details.photoManifest || []).forEach(function(entry) {
+      if (entry.gdFileId && deleted[entry.gdFileId]) delete entry.gdFileId;
+    });
+
+    var remainingIds = getDriveFileIdsForResponse(details);
+    details.driveArchivedPhotoCount = (details.photoManifest || []).filter(function(entry) { return !!entry.gdFileId; }).length;
+    if (!remainingIds.length) {
+      details.driveArchiveRequired = false;
+      details.driveArchiveStatus = 'deleted';
+    } else {
+      details.driveArchiveStatus = 'partial';
+    }
+    record.details = details;
+
+    return new Promise(function(resolve, reject) {
+      _api.call('Set', { typeName: 'AddInData', entity: record }, function() {
+        details._addInDataId = record.id;
+        var index = RESPONSES.findIndex(function(item) { return item.id === responseId; });
+        if (index >= 0) RESPONSES[index] = details;
+        resolve();
+      }, reject);
+    });
+  }).catch(function(err) {
+    if (attempt >= 2) throw err;
+    return new Promise(function(resolve) { setTimeout(resolve, 300 * (attempt + 1)); })
+      .then(function() { return markOneDriveArchiveDeleted(responseId, deletedIds, attempt + 1); });
+  });
+}
+
+function markDriveArchiveFilesDeleted(submissionIds, deletedIds) {
+  var chain = Promise.resolve();
+  (submissionIds || []).forEach(function(responseId) {
+    chain = chain.then(function() { return markOneDriveArchiveDeleted(responseId, deletedIds, 0); });
+  });
+  return chain.then(function() { renderTable(); });
+}
+
 async function executeStorageAction() {
   if (!_storageAction) return;
   var btn = document.getElementById('confirmActionBtn');
   btn.textContent = 'Deleting…'; btn.disabled = true;
 
   try {
-    await gdRefreshToken(function(token) { if (_gdConfig) _gdConfig.accessToken = token; }, function() {});
-    var token = _gdConfig.accessToken;
-    var done = 0;
+    var token = await new Promise(function(resolve, reject) { gdRefreshToken(resolve, reject); });
+    var deletedIds = [];
+    var failedIds = [];
 
     for (var i = 0; i < _storageAction.fileIds.length; i++) {
       try {
-        await fetch('https://www.googleapis.com/drive/v3/files/' + _storageAction.fileIds[i], {
+        var deleteResponse = await fetch('https://www.googleapis.com/drive/v3/files/' + _storageAction.fileIds[i], {
           method: 'DELETE',
           headers: { 'Authorization': 'Bearer ' + token }
         });
-      } catch(e) {}
-      done++;
-      btn.textContent = 'Deleting ' + done + '/' + _storageAction.fileIds.length + '…';
+        if (deleteResponse.ok || deleteResponse.status === 404) deletedIds.push(_storageAction.fileIds[i]);
+        else failedIds.push(_storageAction.fileIds[i]);
+      } catch(e) { failedIds.push(_storageAction.fileIds[i]); }
+      btn.textContent = 'Deleting ' + (i + 1) + '/' + _storageAction.fileIds.length + '…';
     }
+
+    await markDriveArchiveFilesDeleted(_storageAction.submissionIds, deletedIds);
 
     closeConfirmModal();
     closeStoragePanel();
     // Reload storage info
     STORAGE_CACHE = null;
     loadStorageInfo();
-    alert('Done — ' + done + ' photo' + (done!==1?'s':'') + ' deleted from Google Drive.');
+    alert(deletedIds.length + ' photo' + (deletedIds.length!==1?'s':'') + ' deleted from Google Drive.'
+      + (failedIds.length ? '\n' + failedIds.length + ' could not be deleted and remain referenced.' : ''));
   } catch(e) {
     btn.textContent = 'Confirm Delete';
     btn.disabled = false;
