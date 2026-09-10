@@ -97,7 +97,7 @@
   </div>
   <span style="font-size:15px;font-weight:700;color:#1e293b;">Check-In Dashboard</span>
   <span id="dbBadge" style="font-size:11px;font-weight:600;background:#eff6ff;color:#1d4ed8;padding:2px 10px;border-radius:6px;border:1px solid #bfdbfe;">—</span>
-  <span style="font-size:10px;color:#cbd5e1;">v7.3</span>
+  <span style="font-size:10px;color:#cbd5e1;">v7.4</span>
   <button id="storageBtn" onclick="openStoragePanel()" style="margin-left:auto;display:flex;align-items:center;gap:8px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:7px 14px;cursor:pointer;color:#64748b;font-size:12px;font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,0.06);transition:box-shadow .15s;">
     <svg style="width:14px;height:14px;flex-shrink:0;" fill="none" stroke="#94a3b8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z"/></svg>
     <div style="display:flex;flex-direction:column;align-items:flex-start;gap:3px;">
@@ -876,6 +876,206 @@ function setLoading(on) {
   document.getElementById('tableWrapper').classList.toggle('hidden', on);
 }
 
+function titleCaseSlot(slot) {
+  if (!slot) return 'Walkaround';
+  return slot.charAt(0).toUpperCase() + slot.slice(1);
+}
+
+function findItemLabel(response, itemId) {
+  var item = (response.items || []).find(function(i) { return i.id === itemId; });
+  return item && item.label ? item.label : 'Checklist item';
+}
+
+function getResponsePhotoEntries(response, includeNonReady) {
+  var entries = [];
+  var includeMissing = includeNonReady === true;
+  var manifestMode = response.photoStorageVersion === 2 && Array.isArray(response.photoManifest) && response.photoManifest.length;
+
+  if (manifestMode) {
+    response.photoManifest.forEach(function(raw, idx) {
+      var state = raw.state || ((raw.mediaFileId || raw.gdFileId) ? 'ready' : 'missing');
+      var storage = raw.gdFileId ? 'drive' : (raw.mediaFileId ? 'media' : 'none');
+      var fileId = raw.gdFileId || raw.mediaFileId || '';
+      if (!includeMissing && state !== 'ready') return;
+      if (!includeMissing && !fileId) return;
+      entries.push({
+        key: raw.key || ('manifest:' + idx),
+        kind: raw.kind || 'walkaround',
+        slot: raw.slot || '',
+        itemId: raw.itemId || '',
+        index: (typeof raw.index === 'number') ? raw.index : 0,
+        storage: storage,
+        fileId: fileId,
+        state: state,
+        error: raw.error || '',
+        label: (raw.kind === 'item') ? findItemLabel(response, raw.itemId) : titleCaseSlot(raw.slot)
+      });
+    });
+  } else {
+    var walkaroundEntries = [];
+    if (response.gdFileIds && response.gdFileIds.length) {
+      response.gdFileIds.forEach(function(id, i) {
+        walkaroundEntries.push({
+          key: 'walkaround:' + i,
+          kind: 'walkaround',
+          slot: ['front', 'left', 'right', 'rear'][i] || '',
+          itemId: '',
+          index: i,
+          storage: 'drive',
+          fileId: id,
+          state: 'ready',
+          error: '',
+          label: titleCaseSlot(['front', 'left', 'right', 'rear'][i] || '')
+        });
+      });
+    } else if (response.mediaFileIds && response.mediaFileIds.length) {
+      response.mediaFileIds.forEach(function(id, i) {
+        walkaroundEntries.push({
+          key: 'walkaround-media:' + i,
+          kind: 'walkaround',
+          slot: ['front', 'left', 'right', 'rear'][i] || '',
+          itemId: '',
+          index: i,
+          storage: 'media',
+          fileId: id,
+          state: 'ready',
+          error: '',
+          label: titleCaseSlot(['front', 'left', 'right', 'rear'][i] || '')
+        });
+      });
+    }
+    entries = entries.concat(walkaroundEntries);
+
+    (response.items || []).forEach(function(item) {
+      var ids = [];
+      var storage = 'none';
+      if (item.gdItemPhotoIds && item.gdItemPhotoIds.length) {
+        ids = item.gdItemPhotoIds.slice();
+        storage = 'drive';
+      } else if (item.mediaFileIds && item.mediaFileIds.length) {
+        ids = item.mediaFileIds.slice();
+        storage = 'media';
+      } else if (item.itemMediaFileIds && item.itemMediaFileIds.length) {
+        ids = item.itemMediaFileIds.slice();
+        storage = 'media';
+      }
+
+      ids.forEach(function(id, idx) {
+        entries.push({
+          key: 'item:' + item.id + ':' + idx,
+          kind: 'item',
+          slot: '',
+          itemId: item.id,
+          index: idx,
+          storage: storage,
+          fileId: id,
+          state: 'ready',
+          error: '',
+          label: item.label || 'Checklist item'
+        });
+      });
+
+      if (includeMissing) {
+        var expected = item.photoCount || 0;
+        for (var m = ids.length; m < expected; m++) {
+          entries.push({
+            key: 'item-missing:' + item.id + ':' + m,
+            kind: 'item',
+            slot: '',
+            itemId: item.id,
+            index: m,
+            storage: 'none',
+            fileId: '',
+            state: 'missing',
+            error: '',
+            label: item.label || 'Checklist item'
+          });
+        }
+      }
+    });
+
+    if (includeMissing) {
+      var expectedWalkaround = response.photoCount || 0;
+      var haveWalkaround = walkaroundEntries.length;
+      for (var w = haveWalkaround; w < expectedWalkaround; w++) {
+        var missingSlot = ['front', 'left', 'right', 'rear'][w] || '';
+        entries.push({
+          key: 'walkaround-missing:' + w,
+          kind: 'walkaround',
+          slot: missingSlot,
+          itemId: '',
+          index: w,
+          storage: 'none',
+          fileId: '',
+          state: 'missing',
+          error: '',
+          label: titleCaseSlot(missingSlot)
+        });
+      }
+    }
+  }
+
+  entries.sort(function(a, b) {
+    if (a.kind !== b.kind) return a.kind === 'walkaround' ? -1 : 1;
+    if (a.kind === 'walkaround') {
+      var order = { front: 0, left: 1, right: 2, rear: 3 };
+      return (order[a.slot] != null ? order[a.slot] : 9) - (order[b.slot] != null ? order[b.slot] : 9);
+    }
+    if (a.itemId !== b.itemId) return String(a.itemId).localeCompare(String(b.itemId));
+    return (a.index || 0) - (b.index || 0);
+  });
+
+  return entries;
+}
+
+function getResponsePhotoSummary(response) {
+  var entries = getResponsePhotoEntries(response, true);
+  var summary = {
+    capturedCount: entries.length,
+    retrievableCount: 0,
+    pendingCount: 0,
+    failedCount: 0,
+    missingCount: 0,
+    walkaroundCount: 0,
+    walkaroundRetrievableCount: 0,
+    itemCount: 0,
+    itemRetrievableCount: 0
+  };
+
+  entries.forEach(function(entry) {
+    var isWalkaround = entry.kind === 'walkaround';
+    if (isWalkaround) summary.walkaroundCount++;
+    else summary.itemCount++;
+
+    if (entry.state === 'ready' && entry.fileId) {
+      summary.retrievableCount++;
+      if (isWalkaround) summary.walkaroundRetrievableCount++;
+      else summary.itemRetrievableCount++;
+    } else if (entry.state === 'pending' || entry.state === 'processing') {
+      summary.pendingCount++;
+    } else if (entry.state === 'failed') {
+      summary.failedCount++;
+    } else {
+      summary.missingCount++;
+    }
+  });
+
+  if (response.photoStorageVersion === 2) {
+    if (typeof response.capturedPhotoCount === 'number') summary.capturedCount = Math.max(summary.capturedCount, response.capturedPhotoCount);
+    if (typeof response.photoPendingCount === 'number') summary.pendingCount = Math.max(summary.pendingCount, response.photoPendingCount);
+    if (typeof response.photoFailedCount === 'number') summary.failedCount = Math.max(summary.failedCount, response.photoFailedCount);
+    if (typeof response.storedPhotoCount === 'number') summary.retrievableCount = Math.min(summary.capturedCount, Math.max(summary.retrievableCount, response.storedPhotoCount));
+  }
+
+  return summary;
+}
+
+function getItemPhotoEntries(response, itemId, includeNonReady) {
+  return getResponsePhotoEntries(response, includeNonReady).filter(function(entry) {
+    return entry.kind === 'item' && entry.itemId === itemId;
+  });
+}
+
 function buildFilterOptions() {
   const drivers  = [...new Set(RESPONSES.map(r => r.driverName).filter(Boolean))].sort();
   const vehicles = [...new Set(RESPONSES.map(r => r.deviceName).filter(Boolean))].sort();
@@ -892,7 +1092,7 @@ function renderKPIs(data) {
   const passCount = data.filter(r => r.overallStatus === 'pass').length;
   const passRate  = total > 0 ? Math.round(passCount / total * 100) : 0;
   const issues    = data.reduce((s, r) => s + (r.flaggedCount || 0), 0);
-  const photos    = data.reduce((s, r) => s + (r.photoCount  || 0), 0);
+  const photos    = data.reduce((s, r) => s + getResponsePhotoSummary(r).retrievableCount, 0);
   const avg       = total > 0 ? (photos / total).toFixed(1) : '0.0';
 
   document.getElementById('kpiTotal').textContent      = total;
@@ -911,7 +1111,7 @@ function renderKPIs(data) {
     if (kpiIssuesLabel) kpiIssuesLabel.textContent = flagged + ' flagged · ' + resolved + ' resolved';
   }
   document.getElementById('kpiPhotos').textContent     = photos;
-  document.getElementById('kpiPhotosLabel').textContent = 'Avg ' + avg + ' per check';
+  document.getElementById('kpiPhotosLabel').textContent = 'Avg ' + avg + ' retrievable/check';
 }
 
 // ── Compliance ────────────────────────────────────────────────────────────────
@@ -1197,7 +1397,7 @@ var KPI_META = [
   { title: 'Total Submissions',      color: '#0047BB', type: 'bar',  unit: '',  key: 'submissions' },
   { title: 'Pass Rate',              color: '#16a34a', type: 'line', unit: '%', key: 'passrate'    },
   { title: 'Issues Flagged',         color: '#dc2626', type: 'bar',  unit: '',  key: 'issues', freqChart: true },
-  { title: 'Photos Captured',        color: '#0284c7', type: 'bar',  unit: '',  key: 'photos'      },
+  { title: 'Photos Retrievable',     color: '#0284c7', type: 'bar',  unit: '',  key: 'photos'      },
   { title: 'Between-Trip Incidents', color: '#ea580c', type: 'bar',  unit: '',  key: 'incidents'   }
 ];
 
@@ -1332,7 +1532,7 @@ function getValueFn(key) {
     return Math.round(recs.filter(function(r){ return r.overallStatus === 'pass'; }).length / recs.length * 100);
   };
   if (key === 'issues')     return function(recs) { return recs.reduce(function(s,r){ return s+(r.flaggedCount||0); }, 0); };
-  if (key === 'photos')     return function(recs) { return recs.reduce(function(s,r){ return s+(r.photoCount||0); }, 0); };
+  if (key === 'photos')     return function(recs) { return recs.reduce(function(s,r){ return s + getResponsePhotoSummary(r).retrievableCount; }, 0); };
   if (key === 'incidents')  return function(recs) { return 0; }; // incidents need pair analysis — show 0 until panel opens
   return function(recs) { return recs.length; };
 }
@@ -1626,6 +1826,10 @@ function renderTable() {
     const dateStr = dt.toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' });
     const timeStr = dt.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' });
     const isExp   = expandedId === r.id;
+    const photoSummary = getResponsePhotoSummary(r);
+    const photoCell = photoSummary.capturedCount
+      ? (photoSummary.retrievableCount + '/' + photoSummary.capturedCount + ' 📷')
+      : '—';
 
     return `
       <tr class="clickable border-b border-slate-100 ${isExp ? 'row-expanded' : ''}" onclick="toggleRow('${r.id}')">
@@ -1644,7 +1848,7 @@ function renderTable() {
             ? `<span class="text-red-600 font-semibold text-sm">${r.flaggedCount} issue${r.flaggedCount > 1 ? 's' : ''}</span>`
             : `<span class="text-slate-300 text-sm">—</span>`}
         </td>
-        <td class="px-5 py-3.5 text-slate-500 text-sm">${(r.photoCount || 0) + (r.items || []).reduce((s, i) => s + (i.gdItemPhotoIds ? i.gdItemPhotoIds.length : 0), 0)} 📷</td>
+        <td class="px-5 py-3.5 text-slate-500 text-sm">${photoCell}</td>
         <td class="px-4 py-3.5 text-slate-300">
           <svg class="w-4 h-4 transition-transform ${isExp ? 'rotate-90' : ''}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
         </td>
@@ -1656,6 +1860,7 @@ function renderTable() {
 
 function expandedRow(r) {
   const items = r.items || [];
+  const photoSummary = getResponsePhotoSummary(r);
   const itemsHtml = items.length > 0
     ? items.map(item => {
         const isPicture = item.type === 'picture_required';
@@ -1663,12 +1868,14 @@ function expandedRow(r) {
         const isPass = !isPicture && (item.value === 'pass' || item.value === 'yes');
         const colorClass = isFail ? 'item-fail' : isPass ? 'item-pass' : 'item-na';
         const icon = isPicture ? '📷' : isFail ? '✕' : isPass ? '✓' : '—';
-        const itemPhotoIds = item.gdItemPhotoIds && item.gdItemPhotoIds.length ? item.gdItemPhotoIds : [];
-        const itemPhotoBtn = itemPhotoIds.length
+        const itemEntries = getItemPhotoEntries(r, item.id, true);
+        const itemReady = itemEntries.filter(function(e) { return e.state === 'ready' && e.fileId; }).length;
+        const itemTotal = itemEntries.length || item.photoCount || 0;
+        const itemPhotoBtn = itemReady
           ? `<button onclick="openItemPhotoPopover(event,'${r.id}','${item.id}')"
                class="flex items-center gap-1 text-xs text-red-500 bg-red-50 border border-red-200 hover:bg-red-100 rounded-lg px-2 py-1 transition-colors mt-1">
                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
-               ${itemPhotoIds.length} issue photo${itemPhotoIds.length > 1 ? 's' : ''}
+               ${itemReady}/${itemTotal} issue photo${itemTotal > 1 ? 's' : ''}
              </button>`
           : '';
         return `
@@ -1680,22 +1887,24 @@ function expandedRow(r) {
               ${item.note ? `<p class="text-xs text-slate-400 mt-0.5 italic">${item.note}</p>` : ''}
               ${itemPhotoBtn}
             </div>
-            <span class="text-xs text-slate-500 shrink-0 ${colorClass}">${isPicture ? (item.photoCount > 0 ? item.photoCount + ' photo' + (item.photoCount > 1 ? 's' : '') : '—') : (item.value || '—')}</span>
+            <span class="text-xs text-slate-500 shrink-0 ${colorClass}">${isPicture ? (itemTotal ? (itemReady + '/' + itemTotal + ' stored') : '—') : (item.value || '—')}</span>
           </div>`;
       }).join('')
     : '<p class="text-xs text-slate-400 py-4 text-center">No items recorded</p>';
 
-  const mediaIds      = r.mediaFileIds || [];
-  const walkaroundCount = r.gdFileIds && r.gdFileIds.length ? r.gdFileIds.length : (r.photoCount || mediaIds.length);
-  const itemPhotoCount  = (r.items || []).reduce(function(s, i) { return s + (i.gdItemPhotoIds ? i.gdItemPhotoIds.length : 0); }, 0);
-  const photoCount      = walkaroundCount + itemPhotoCount;
-
-  const photosHtml = photoCount > 0
-    ? '<button onclick="openPhotoPopover(event,\'' + r.id + '\',' + photoCount + ')" '
+  const photosHtml = photoSummary.capturedCount > 0
+    ? '<button onclick="openPhotoPopover(event,\'' + r.id + '\',' + photoSummary.retrievableCount + ',' + photoSummary.capturedCount + ')" '
       + 'class="flex items-center gap-2 px-3 py-2 bg-slate-100 hover:bg-blue-50 border border-slate-200 hover:border-blue-300 rounded-xl text-slate-600 hover:text-blue-600 transition-all text-sm font-medium">'
       + '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/></svg>'
-      + photoCount + ' photo' + (photoCount > 1 ? 's' : '') + '</button>'
+      + photoSummary.retrievableCount + '/' + photoSummary.capturedCount + ' retrievable</button>'
     : '<p class="text-xs text-slate-400">No photos</p>';
+
+  const photoStatusHtml = photoSummary.capturedCount > 0
+    ? '<p class="text-xs text-slate-500 mt-2">Stored: ' + photoSummary.retrievableCount
+      + ' · Pending: ' + photoSummary.pendingCount
+      + ' · Missing/failed: ' + (photoSummary.failedCount + photoSummary.missingCount)
+      + '</p>'
+    : '';
 
   return `
     <tr class="row-expanded">
@@ -1706,8 +1915,9 @@ function expandedRow(r) {
             <div class="bg-white rounded-xl border border-slate-200 px-4 py-2">${itemsHtml}</div>
           </div>
           <div>
-            <p class="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-3">Photos (${photoCount})</p>
+            <p class="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-3">Photos (${photoSummary.retrievableCount}/${photoSummary.capturedCount})</p>
             ${photosHtml}
+            ${photoStatusHtml}
             <div class="mt-5 flex flex-col gap-2">
               <button onclick="exportSubmissionPDF('${r.id}')"
                 class="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-[#0047BB] hover:bg-blue-700 text-white text-sm font-semibold rounded-xl transition-colors">
@@ -1784,6 +1994,7 @@ function exportArchive() {
   var headers = ['Date', 'Time', 'Driver', 'Vehicle', 'Checklist', 'Status', 'Issues Flagged', 'Photo Count'];
   var rows = old.map(function(r) {
     var dt = new Date(r.submittedAt);
+    var summary = getResponsePhotoSummary(r);
     return [
       dt.toLocaleDateString('en-GB'),
       dt.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
@@ -1792,7 +2003,7 @@ function exportArchive() {
       r.templateName || '',
       (r.overallStatus || '').toUpperCase(),
       r.flaggedCount || 0,
-      r.photoCount || 0
+      summary.retrievableCount + '/' + summary.capturedCount
     ];
   });
 
@@ -1841,6 +2052,13 @@ function exportArchive() {
 
 function purgeOldRecords() {
   var old = oldRecords();
+  var hasV2Media = old.some(function(r) {
+    return r.photoStorageVersion === 2 && Array.isArray(r.photoManifest) && r.photoManifest.length;
+  });
+  if (hasV2Media) {
+    alert('Bulk purge is disabled for MediaFile v2 records until archive and cleanup checks are complete. Use single-record delete instead.');
+    return;
+  }
   if (old.length === 0) return;
   if (!confirm('Permanently delete ' + old.length + ' submission' + (old.length !== 1 ? 's' : '') +
       ' older than ' + RETENTION_DAYS + ' days?\n\nExport the archive first if you haven\'t already. This cannot be undone.')) return;
@@ -1888,7 +2106,7 @@ function confirmDeleteSubmission(responseId, event) {
       </div>
       <p style="font-size:14px;color:#475569;margin:0 0 6px 0;">You are about to delete the following entry:</p>
       <p style="font-size:13px;font-weight:600;color:#1e293b;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:10px 14px;margin:0 0 10px 0;">${label}</p>
-      <p style="font-size:12px;color:#94a3b8;margin:0 0 22px 0;">This removes the record from MyGeotab and permanently deletes any associated Drive files. Are you sure you want to continue?</p>
+      <p style="font-size:12px;color:#94a3b8;margin:0 0 22px 0;">This removes the record from MyGeotab and permanently deletes all associated stored photos. Are you sure you want to continue?</p>
       <div style="display:flex;gap:10px;justify-content:flex-end;">
         <button onclick="document.getElementById('deleteConfirmModal').remove()"
           style="padding:8px 18px;border-radius:10px;border:1px solid #e2e8f0;background:#fff;color:#64748b;font-size:14px;font-weight:600;cursor:pointer;">
@@ -1912,252 +2130,413 @@ function executeDeleteSubmission(responseId) {
   var r = RESPONSES.find(function(x) { return x.id === responseId; });
   if (!r || !r._addInDataId) { console.warn('No AddInData ID for', responseId); return; }
 
-  // Collect all Drive file IDs (walkaround + item photos)
-  var allFileIds = (r.gdFileIds || []).concat(
-    (r.items || []).reduce(function(acc, item) { return acc.concat(item.gdItemPhotoIds || []); }, [])
-  );
+  var entries = getResponsePhotoEntries(r, true).filter(function(e) { return e.state === 'ready' && !!e.fileId; });
+  var seenDrive = {};
+  var seenMedia = {};
+  var driveIds = [];
+  var mediaIds = [];
+  entries.forEach(function(e) {
+    if (e.storage === 'drive' && !seenDrive[e.fileId]) { seenDrive[e.fileId] = true; driveIds.push(e.fileId); }
+    if (e.storage === 'media' && !seenMedia[e.fileId]) { seenMedia[e.fileId] = true; mediaIds.push(e.fileId); }
+  });
 
-  function removeRecord() {
-    _api.call('Remove', { typeName: 'AddInData', entity: { id: r._addInDataId } }, function() {
-      RESPONSES = RESPONSES.filter(function(x) { return x.id !== responseId; });
-      expandedId = null;
-      buildFilterOptions();
-      applyFilters();
-    }, function(err) {
-      console.error('Delete failed', err);
-      alert('Failed to delete record — please try again.');
-    });
-  }
-
-  // Delete Drive files first (best-effort), then remove the record regardless
-  if (allFileIds.length > 0 && _gdConfig && _gdConfig.refreshToken) {
+  function deleteDriveFiles(onDone) {
+    if (!driveIds.length) { onDone([]); return; }
+    if (!_gdConfig || !_gdConfig.refreshToken) {
+      onDone(['Google Drive refresh token is not available']);
+      return;
+    }
     gdRefreshToken(function(token) {
-      var pending = allFileIds.length;
-      allFileIds.forEach(function(fileId) {
+      var pending = driveIds.length;
+      var errors = [];
+      driveIds.forEach(function(fileId) {
         fetch('https://www.googleapis.com/drive/v3/files/' + fileId, {
           method: 'DELETE',
           headers: { 'Authorization': 'Bearer ' + token }
-        }).finally(function() {
+        })
+        .then(function(resp) {
+          if (!resp.ok) errors.push('Drive file ' + fileId + ' delete failed (HTTP ' + resp.status + ')');
+        })
+        .catch(function(err) {
+          errors.push('Drive file ' + fileId + ' delete failed (' + (err && err.message ? err.message : String(err)) + ')');
+        })
+        .finally(function() {
           pending--;
-          if (pending === 0) removeRecord();
+          if (pending === 0) onDone(errors);
         });
       });
-    }, function() { removeRecord(); });
-  } else {
-    removeRecord();
+    }, function(err) {
+      onDone(['Google Drive token refresh failed: ' + (err && err.message ? err.message : String(err))]);
+    });
   }
+
+  function deleteMediaFiles(onDone) {
+    if (!mediaIds.length) { onDone([]); return; }
+    var idx = 0;
+    var errors = [];
+    function next() {
+      if (idx >= mediaIds.length) { onDone(errors); return; }
+      var mediaId = mediaIds[idx++];
+      _api.call('Remove', { typeName: 'MediaFile', entity: { id: mediaId } },
+        function() { next(); },
+        function(err) {
+          errors.push('MediaFile ' + mediaId + ' delete failed (' + (err && err.message ? err.message : String(err)) + ')');
+          next();
+        });
+    }
+    next();
+  }
+
+  function fetchIssueRecordIds(onDone) {
+    _api.call('Get', { typeName: 'AddInData', search: { addInId: ADDIN_ID } }, function(results) {
+      var ids = (results || []).filter(function(row) {
+        return row.details && row.details.type === 'IssueStatus' && row.details.submissionId === responseId;
+      }).map(function(row) { return row.id; });
+      onDone(ids);
+    }, function() { onDone([]); });
+  }
+
+  function removeAddInDataRecords(recordIds, onDone) {
+    if (!recordIds.length) { onDone([]); return; }
+    var idx = 0;
+    var errors = [];
+    function next() {
+      if (idx >= recordIds.length) { onDone(errors); return; }
+      var id = recordIds[idx++];
+      _api.call('Remove', { typeName: 'AddInData', entity: { id: id } },
+        function() { next(); },
+        function(err) {
+          errors.push('AddInData ' + id + ' delete failed (' + (err && err.message ? err.message : String(err)) + ')');
+          next();
+        });
+    }
+    next();
+  }
+
+  deleteDriveFiles(function(driveErrors) {
+    deleteMediaFiles(function(mediaErrors) {
+      var cleanupErrors = driveErrors.concat(mediaErrors);
+      if (cleanupErrors.length) {
+        console.error('Photo cleanup failed; record left intact', cleanupErrors);
+        alert('Could not delete all associated photos. Submission was NOT removed.\n\n' + cleanupErrors.slice(0, 4).join('\n'));
+        return;
+      }
+
+      fetchIssueRecordIds(function(issueRecordIds) {
+        var removeIds = [r._addInDataId].concat(issueRecordIds);
+        removeAddInDataRecords(removeIds, function(recordErrors) {
+          if (recordErrors.length) {
+            console.error('Record cleanup failed', recordErrors);
+            alert('Photos were deleted but record cleanup was incomplete.\n\n' + recordErrors.slice(0, 4).join('\n'));
+            return;
+          }
+
+          RESPONSES = RESPONSES.filter(function(x) { return x.id !== responseId; });
+          ISSUE_RECORDS = ISSUE_RECORDS.filter(function(i) { return i.submissionId !== responseId; });
+          expandedId = null;
+          buildFilterOptions();
+          applyFilters();
+        });
+      });
+    });
+  });
 }
 
 // ── Photo popover ─────────────────────────────────────────────────────────────
 var _activePopoverResponseId = null;
+var _activePhotoCards = [];
 var _activePhotoSrcs = [];
 var _activePhotoIndex = 0;
 
-function openPhotoPopover(event, responseId, photoCount) {
-  event.stopPropagation();
-  const popover = document.getElementById('photoPopover');
+function htmlSafe(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
 
-  // Toggle off if same response
+function getFreshMediaSession(onSuccess, onError) {
+  if (!_api || !_api.getSession) { onError('Not connected to MyGeotab'); return; }
+  _api.getSession(function(session, server) {
+    if (!session || !session.sessionId) { onError('No MyGeotab session'); return; }
+    var host = String((session.path && session.path !== 'ThisServer') ? session.path : (server || location.hostname))
+      .replace(/^https?:\/\//i, '')
+      .replace(/\/.*$/, '');
+    onSuccess({
+      host: host,
+      userName: session.userName,
+      database: session.database,
+      sessionId: session.sessionId
+    });
+  });
+}
+
+function buildMediaUrl(mediaCtx, mediaId) {
+  return 'https://' + mediaCtx.host + '/apiv1/DownloadMediaFile'
+    + '?mediaFile={"id":"' + encodeURIComponent(mediaId) + '"}'
+    + '&credentials={"userName":"' + encodeURIComponent(mediaCtx.userName) + '","database":"'
+    + encodeURIComponent(mediaCtx.database) + '","sessionId":"' + encodeURIComponent(mediaCtx.sessionId) + '"}';
+}
+
+function fetchImageCard(entry, driveToken, mediaCtx) {
+  return new Promise(function(resolve) {
+    if (entry.state === 'pending') {
+      resolve({ src: '', label: entry.label, status: 'pending', message: 'Pending', detail: entry.error || '' });
+      return;
+    }
+    if (entry.state !== 'ready' || !entry.fileId) {
+      resolve({ src: '', label: entry.label, status: 'missing', message: 'Missing', detail: entry.error || '' });
+      return;
+    }
+
+    var url = '';
+    var options = {};
+    if (entry.storage === 'drive') {
+      if (!driveToken) {
+        resolve({ src: '', label: entry.label, status: 'unavailable', message: 'Drive auth needed', detail: '' });
+        return;
+      }
+      url = 'https://www.googleapis.com/drive/v3/files/' + entry.fileId + '?alt=media';
+      options.headers = { 'Authorization': 'Bearer ' + driveToken };
+    } else if (entry.storage === 'media') {
+      if (!mediaCtx) {
+        resolve({ src: '', label: entry.label, status: 'unavailable', message: 'Session needed', detail: '' });
+        return;
+      }
+      url = buildMediaUrl(mediaCtx, entry.fileId);
+    } else {
+      resolve({ src: '', label: entry.label, status: 'missing', message: 'Missing', detail: entry.error || '' });
+      return;
+    }
+
+    fetch(url, options)
+      .then(function(resp) {
+        var ct = resp.headers && resp.headers.get ? (resp.headers.get('content-type') || '') : '';
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        if (ct && ct.indexOf('image/') !== 0) throw new Error('Non-image response');
+        return resp.blob();
+      })
+      .then(function(blob) {
+        if (!blob || !blob.size) throw new Error('Empty image');
+        resolve({ src: URL.createObjectURL(blob), label: entry.label, status: 'ready', message: '', detail: '' });
+      })
+      .catch(function(err) {
+        resolve({ src: '', label: entry.label, status: 'unavailable', message: 'Unavailable', detail: err && err.message ? err.message : String(err) });
+      });
+  });
+}
+
+function loadPhotoCards(entries, onDone) {
+  var needsDrive = entries.some(function(e) { return e.storage === 'drive' && e.state === 'ready' && e.fileId; });
+  var needsMedia = entries.some(function(e) { return e.storage === 'media' && e.state === 'ready' && e.fileId; });
+
+  var driveTokenPromise = !needsDrive
+    ? Promise.resolve('')
+    : new Promise(function(resolve) { gdRefreshToken(function(token) { resolve(token); }, function() { resolve(''); }); });
+
+  var mediaPromise = !needsMedia
+    ? Promise.resolve(null)
+    : new Promise(function(resolve) { getFreshMediaSession(function(ctx) { resolve(ctx); }, function() { resolve(null); }); });
+
+  Promise.all([driveTokenPromise, mediaPromise]).then(function(args) {
+    var token = args[0];
+    var mediaCtx = args[1];
+    return Promise.all(entries.map(function(entry) {
+      return fetchImageCard(entry, token, mediaCtx);
+    }));
+  }).then(function(cards) {
+    onDone(cards);
+  });
+}
+
+function openPhotoPopover(event, responseId, retrievableCount, capturedCount) {
+  event.stopPropagation();
+  var popover = document.getElementById('photoPopover');
+
   if (!popover.classList.contains('hidden') && _activePopoverResponseId === responseId) {
     closePhotoPopover();
     return;
   }
 
-  _activePopoverResponseId = responseId;
-  _activePhotoSrcs = [];
-
-  document.getElementById('photoPopoverTitle').textContent = photoCount + ' photo' + (photoCount > 1 ? 's' : '');
-  document.getElementById('photoPopoverGrid').innerHTML = '<p class="text-xs text-slate-400">Loading…</p>';
-
-  const rect = event.target.closest('button').getBoundingClientRect();
-  popover.style.top = Math.min(rect.bottom + 8, window.innerHeight - 400) + 'px';
-  popover.style.left = Math.min(rect.left, window.innerWidth - 440) + 'px';
-  popover.classList.remove('hidden');
-  setTimeout(function() { onDoc('click', closePopoverOnOutsideClick); }, 10);
-
-  // Load images — supports Google Drive (gdFileIds), base64 (photos[]), and MediaFile (mediaFileIds[])
-  const response = RESPONSES.find(function(r) { return r.id === responseId; });
+  var response = RESPONSES.find(function(r) { return r.id === responseId; });
   if (!response) {
     document.getElementById('photoPopoverGrid').innerHTML = '<p class="text-xs text-slate-400">No photos found.</p>';
     return;
   }
 
-  // Google Drive photos
-  if (response.gdFileIds && response.gdFileIds.length) {
-    gdRefreshToken(function(accessToken) {
-      _activePhotoSrcs = [];
-      var loaded = 0;
-      var total = response.gdFileIds.length;
-      // Pre-fill with nulls
-      for (var j = 0; j < total; j++) _activePhotoSrcs.push(null);
+  var summary = getResponsePhotoSummary(response);
+  var total = (typeof capturedCount === 'number') ? capturedCount : summary.capturedCount;
+  var ready = (typeof retrievableCount === 'number') ? retrievableCount : summary.retrievableCount;
+  var entries = getResponsePhotoEntries(response, true);
 
-      response.gdFileIds.forEach(function(fileId, i) {
-        fetch('https://www.googleapis.com/drive/v3/files/' + fileId + '?alt=media', {
-          headers: { 'Authorization': 'Bearer ' + accessToken }
-        })
-        .then(function(r) { return r.blob(); })
-        .then(function(blob) {
-          _activePhotoSrcs[i] = URL.createObjectURL(blob);
-          loaded++;
-          if (loaded === total) renderPhotoThumbs();
-        })
-        .catch(function() {
-          loaded++;
-          if (loaded === total) renderPhotoThumbs();
-        });
-      });
-    }, function() {
-      document.getElementById('photoPopoverGrid').innerHTML = '<p class="text-xs text-slate-400">Google Drive token expired — reconnect in Checklist Builder.</p>';
-    });
-    return;
-  }
-
-  // Base64 photos
-  if (response.photos && response.photos.length) {
-    _activePhotoSrcs = response.photos;
-    renderPhotoThumbs();
-    return;
-  }
-
-  // Legacy MediaFile photos
-  if (response.mediaFileIds && response.mediaFileIds.length) {
-    _api.getSession(function(session) {
-      var host      = (session.path && session.path !== 'ThisServer') ? session.path : 'my.geotab.com';
-      var userName  = encodeURIComponent(session.userName);
-      var database  = encodeURIComponent(session.database);
-      var sessionId = encodeURIComponent(session.sessionId);
-      _activePhotoSrcs = response.mediaFileIds.map(function(mediaId) {
-        return 'https://' + host + '/apiv1/DownloadMediaFile'
-          + '?mediaFile={"id":"' + mediaId + '"}'
-          + '&credentials={"userName":"' + userName + '","database":"' + database + '","sessionId":"' + sessionId + '"}';
-      });
-      renderPhotoThumbs();
-    });
-    return;
-  }
-
-  // Item-level fail photos (gdItemPhotoIds on each item) — shown when no walkaround photos
-  var allItemPhotoIds = [];
-  (response.items || []).forEach(function(item) {
-    if (item.gdItemPhotoIds && item.gdItemPhotoIds.length) {
-      item.gdItemPhotoIds.forEach(function(id) { allItemPhotoIds.push({ id: id, label: item.label }); });
-    }
-  });
-  if (allItemPhotoIds.length) {
-    gdRefreshToken(function(accessToken) {
-      _activePhotoSrcs = [];
-      var loaded = 0;
-      var total = allItemPhotoIds.length;
-      for (var j = 0; j < total; j++) _activePhotoSrcs.push(null);
-      allItemPhotoIds.forEach(function(entry, i) {
-        fetch('https://www.googleapis.com/drive/v3/files/' + entry.id + '?alt=media', {
-          headers: { 'Authorization': 'Bearer ' + accessToken }
-        })
-        .then(function(r) { return r.blob(); })
-        .then(function(blob) {
-          _activePhotoSrcs[i] = URL.createObjectURL(blob);
-          loaded++;
-          if (loaded === total) renderPhotoThumbs();
-        })
-        .catch(function() {
-          loaded++;
-          if (loaded === total) renderPhotoThumbs();
-        });
-      });
-    }, function() {
-      document.getElementById('photoPopoverGrid').innerHTML = '<p class="text-xs text-slate-400">Google Drive token expired — reconnect in Checklist Builder.</p>';
-    });
-    return;
-  }
-
-  document.getElementById('photoPopoverGrid').innerHTML = '<p class="text-xs text-slate-400">No photos found.</p>';
-}
-
-function openItemPhotoPopover(event, responseId, itemId) {
-  event.stopPropagation();
-  const response = RESPONSES.find(function(r) { return r.id === responseId; });
-  if (!response) return;
-  const item = (response.items || []).find(function(i) { return i.id === itemId; });
-  if (!item || !item.gdItemPhotoIds || !item.gdItemPhotoIds.length) return;
-
-  const popover = document.getElementById('photoPopover');
-  if (!popover.classList.contains('hidden') && _activePopoverResponseId === responseId + '-' + itemId) {
-    closePhotoPopover(); return;
-  }
-  _activePopoverResponseId = responseId + '-' + itemId;
+  _activePopoverResponseId = responseId;
+  _activePhotoCards = [];
   _activePhotoSrcs = [];
-  document.getElementById('photoPopoverTitle').textContent = item.label + ' — ' + item.gdItemPhotoIds.length + ' photo' + (item.gdItemPhotoIds.length > 1 ? 's' : '');
+
+  document.getElementById('photoPopoverTitle').textContent = ready + '/' + total + ' retrievable';
   document.getElementById('photoPopoverGrid').innerHTML = '<p class="text-xs text-slate-400">Loading…</p>';
-  const rect = event.target.closest('button').getBoundingClientRect();
+
+  var anchor = event.target && event.target.closest ? event.target.closest('button') : null;
+  var rect = anchor ? anchor.getBoundingClientRect() : { bottom: 140, left: 20 };
   popover.style.top = Math.min(rect.bottom + 8, window.innerHeight - 400) + 'px';
   popover.style.left = Math.min(rect.left, window.innerWidth - 440) + 'px';
   popover.classList.remove('hidden');
   setTimeout(function() { onDoc('click', closePopoverOnOutsideClick); }, 10);
 
-  gdRefreshToken(function(accessToken) {
-    _activePhotoSrcs = item.gdItemPhotoIds.map(function(fileId) {
-      return { fileId: fileId, token: accessToken };
-    });
-    var loaded = 0;
-    var srcs = new Array(item.gdItemPhotoIds.length).fill(null);
-    item.gdItemPhotoIds.forEach(function(fileId, i) {
-      fetch('https://www.googleapis.com/drive/v3/files/' + fileId + '?alt=media', {
-        headers: { 'Authorization': 'Bearer ' + accessToken }
-      })
-      .then(function(r) { return r.blob(); })
-      .then(function(blob) { srcs[i] = URL.createObjectURL(blob); loaded++; if (loaded === item.gdItemPhotoIds.length) { _activePhotoSrcs = srcs; renderPhotoThumbs(); } })
-      .catch(function() { loaded++; if (loaded === item.gdItemPhotoIds.length) { _activePhotoSrcs = srcs.filter(Boolean); renderPhotoThumbs(); } });
-    });
-  }, function() {
-    document.getElementById('photoPopoverGrid').innerHTML = '<p class="text-xs text-slate-400">Could not load photos — token expired.</p>';
+  if (!entries.length) {
+    document.getElementById('photoPopoverGrid').innerHTML = '<p class="text-xs text-slate-400">No photos found.</p>';
+    return;
+  }
+
+  loadPhotoCards(entries, function(cards) {
+    _activePhotoCards = cards;
+    _activePhotoSrcs = cards.filter(function(c) { return !!c.src; }).map(function(c) { return c.src; });
+    renderPhotoThumbs();
+  });
+}
+
+function openItemPhotoPopover(event, responseId, itemId) {
+  event.stopPropagation();
+  var response = RESPONSES.find(function(r) { return r.id === responseId; });
+  if (!response) return;
+  var item = (response.items || []).find(function(i) { return i.id === itemId; });
+  if (!item) return;
+
+  var popover = document.getElementById('photoPopover');
+  var popoverId = responseId + '-' + itemId;
+  if (!popover.classList.contains('hidden') && _activePopoverResponseId === popoverId) {
+    closePhotoPopover();
+    return;
+  }
+
+  var entries = getItemPhotoEntries(response, itemId, true);
+  var ready = entries.filter(function(e) { return e.state === 'ready' && e.fileId; }).length;
+  var total = entries.length || item.photoCount || 0;
+
+  _activePopoverResponseId = popoverId;
+  _activePhotoCards = [];
+  _activePhotoSrcs = [];
+
+  document.getElementById('photoPopoverTitle').textContent = (item.label || 'Checklist item') + ' — ' + ready + '/' + total + ' retrievable';
+  document.getElementById('photoPopoverGrid').innerHTML = '<p class="text-xs text-slate-400">Loading…</p>';
+
+  var anchor = event.target && event.target.closest ? event.target.closest('button') : null;
+  var rect = anchor ? anchor.getBoundingClientRect() : { bottom: 140, left: 20 };
+  popover.style.top = Math.min(rect.bottom + 8, window.innerHeight - 400) + 'px';
+  popover.style.left = Math.min(rect.left, window.innerWidth - 440) + 'px';
+  popover.classList.remove('hidden');
+  setTimeout(function() { onDoc('click', closePopoverOnOutsideClick); }, 10);
+
+  if (!entries.length) {
+    document.getElementById('photoPopoverGrid').innerHTML = '<p class="text-xs text-slate-400">No photos found.</p>';
+    return;
+  }
+
+  loadPhotoCards(entries, function(cards) {
+    _activePhotoCards = cards;
+    _activePhotoSrcs = cards.filter(function(c) { return !!c.src; }).map(function(c) { return c.src; });
+    renderPhotoThumbs();
   });
 }
 
 function renderPhotoThumbs() {
-  document.getElementById('photoPopoverGrid').innerHTML = _activePhotoSrcs.map(function(src, i) {
-    return '<img id="photo-thumb-' + i + '" alt="Photo ' + (i+1) + '" '
-      + 'style="width:100px;height:75px;object-fit:cover;border-radius:8px;cursor:pointer;border:2px solid transparent;transition:border-color .15s;" '
-      + 'onmouseover="this.style.borderColor=\'#0047BB\'" '
-      + 'onmouseout="this.style.borderColor=\'transparent\'" '
-      + 'onclick="openPhotoFullView(' + i + ')">';
+  var grid = document.getElementById('photoPopoverGrid');
+  if (!grid) return;
+  if (!_activePhotoCards.length) {
+    grid.innerHTML = '<p class="text-xs text-slate-400">No photos found.</p>';
+    return;
+  }
+
+  var readyIndex = 0;
+  var html = _activePhotoCards.map(function(card) {
+    var label = htmlSafe(card.label || 'Photo');
+    if (card.src) {
+      var openIdx = readyIndex;
+      readyIndex++;
+      return '<div style="display:flex;flex-direction:column;gap:4px;">'
+        + '<img src="' + card.src + '" alt="' + label + '" '
+        + 'style="width:100px;height:75px;object-fit:cover;border-radius:8px;cursor:pointer;border:2px solid transparent;transition:border-color .15s;" '
+        + 'onmouseover="this.style.borderColor=\'#0047BB\'" '
+        + 'onmouseout="this.style.borderColor=\'transparent\'" '
+        + 'onclick="openPhotoFullView(' + openIdx + ')">'
+        + '<p style="font-size:11px;color:#64748b;margin:0;line-height:1.2;">' + label + '</p></div>';
+    }
+    var status = htmlSafe(card.message || 'Unavailable');
+    var detail = card.detail ? ('<p style="font-size:10px;color:#94a3b8;margin:2px 0 0 0;line-height:1.2;">' + htmlSafe(card.detail) + '</p>') : '';
+    return '<div style="display:flex;flex-direction:column;gap:4px;">'
+      + '<div style="width:100px;height:75px;border-radius:8px;border:1px dashed #cbd5e1;background:#f8fafc;display:flex;align-items:center;justify-content:center;text-align:center;padding:6px;">'
+      + '<span style="font-size:11px;color:#64748b;font-weight:600;">' + status + '</span></div>'
+      + '<p style="font-size:11px;color:#64748b;margin:0;line-height:1.2;">' + label + '</p>'
+      + detail
+      + '</div>';
   }).join('');
-  _activePhotoSrcs.forEach(function(src, i) {
-    var el = document.getElementById('photo-thumb-' + i);
-    if (el) el.src = src;
-  });
+  grid.innerHTML = html;
 }
 
 var _gdConfig = null;
+
+// This page is public, so the client secret cannot live in it. The broker holds the
+// secret and only answers callers who prove they are signed into this database.
+// Source and deploy notes: ../../token-broker/
+// Names here are dashboard-local on purpose: MyGeotab injects every page of the
+// solution into one shared scope, so a generic name would collide with the builder.
+var _gdBrokerUrl = 'https://script.google.com/macros/s/REPLACE_WITH_DEPLOYMENT_ID/exec';
+var _gdDashSession = null;
+
+function gdDashSession(onReady, onError) {
+  if (_gdDashSession) { onReady(_gdDashSession); return; }
+  if (!_api || !_api.getSession) { onError('Not connected to MyGeotab'); return; }
+  _api.getSession(function(session, server) {
+    if (!session || !session.sessionId) { onError('No MyGeotab session'); return; }
+    _gdDashSession = {
+      // Same shape the launch page already uses to hand a session to the driver
+      // page: getSession reports the server as `path`, and says 'ThisServer' when
+      // the database lives on the one being talked to.
+      server:    (session.path && session.path !== 'ThisServer') ? session.path
+                 : (server || location.hostname),
+      database:  session.database,
+      userName:  session.userName,
+      sessionId: session.sessionId
+    };
+    onReady(_gdDashSession);
+  });
+}
 
 function gdRefreshToken(onSuccess, onError) {
   if (!_gdConfig || !_gdConfig.refreshToken) { onError('No Google Drive config'); return; }
   if (_gdConfig.accessToken && _gdConfig.expiresAt && Date.now() < _gdConfig.expiresAt - 60000) {
     onSuccess(_gdConfig.accessToken); return;
   }
-  fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      client_id:     '1079509518058-aicdrp0e2i9o19dogatjim2lajpufsid.apps.googleusercontent.com',
-      client_secret: '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',
-      refresh_token: _gdConfig.refreshToken,
-      grant_type:    'refresh_token'
+  gdDashSession(function(session) {
+    // Deliberately text/plain: that keeps this a CORS-simple request. Apps Script
+    // does not answer preflight, so application/json never reaches the broker.
+    fetch(_gdBrokerUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({
+        action:       'refresh',
+        session:      session,
+        refreshToken: _gdConfig.refreshToken
+      })
     })
-  })
-  .then(function(r) { return r.json(); })
-  .then(function(data) {
-    if (data.error) { onError(data.error_description || data.error); return; }
-    _gdConfig.accessToken = data.access_token;
-    _gdConfig.expiresAt   = Date.now() + (data.expires_in * 1000);
-    onSuccess(data.access_token);
-  })
-  .catch(function(err) { onError(err.message); });
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.error) { onError(data.error_description || data.error); return; }
+      _gdConfig.accessToken = data.access_token;
+      _gdConfig.expiresAt   = Date.now() + (data.expires_in * 1000);
+      onSuccess(data.access_token);
+    })
+    .catch(function(err) { onError(err.message); });
+  }, onError);
 }
 
 function closePhotoPopover() {
   const popover = document.getElementById('photoPopover');
   if (popover) popover.classList.add('hidden');
   _activePopoverResponseId = null;
+  _activePhotoCards = [];
+  _activePhotoSrcs = [];
   closePhotoFullView();
   document.removeEventListener('click', closePopoverOnOutsideClick);
 }
@@ -2194,6 +2573,10 @@ function renderPhotoFullView() {
   const counter = document.getElementById('photoFullCounter');
   const dl = document.getElementById('photoDownloadBtn');
   if (!img || !counter || !dl) return;
+  if (!src) {
+    closePhotoFullView();
+    return;
+  }
   img.src = src;
   counter.textContent = (_activePhotoIndex + 1) + ' / ' + _activePhotoSrcs.length;
   dl.href = src;
@@ -2222,34 +2605,100 @@ onDoc('keydown', function(e) {
 
 // ── PDF image cache (shared across all export functions) ─────────────────────
 var _pdfImgCache = {};
+var _pdfMediaCtx = null;
 
-function _pdfFetchImage(url) {
-  if (_pdfImgCache[url] !== undefined) return Promise.resolve(_pdfImgCache[url]);
-  return fetch(url, _gdConfig ? { headers: { 'Authorization': 'Bearer ' + _gdConfig.accessToken } } : {})
-    .then(function(resp) { return resp.blob(); })
+function _pdfSourceKey(source) {
+  return source.url + '|' + (source.headers && source.headers.Authorization ? source.headers.Authorization : '');
+}
+
+function _pdfEntrySource(entry) {
+  if (!entry || entry.state !== 'ready' || !entry.fileId) return null;
+  if (entry.storage === 'drive') {
+    return {
+      url: 'https://www.googleapis.com/drive/v3/files/' + entry.fileId + '?alt=media',
+      headers: (_gdConfig && _gdConfig.accessToken) ? { 'Authorization': 'Bearer ' + _gdConfig.accessToken } : null
+    };
+  }
+  if (entry.storage === 'media' && _pdfMediaCtx) {
+    return { url: buildMediaUrl(_pdfMediaCtx, entry.fileId), headers: null };
+  }
+  return null;
+}
+
+function _pdfFetchImage(sourceOrUrl) {
+  var source = (typeof sourceOrUrl === 'string') ? { url: sourceOrUrl, headers: null } : sourceOrUrl;
+  var key = _pdfSourceKey(source);
+  if (_pdfImgCache[key] !== undefined) return Promise.resolve(_pdfImgCache[key]);
+  return fetch(source.url, source.headers ? { headers: source.headers } : {})
+    .then(function(resp) {
+      var ct = resp.headers && resp.headers.get ? (resp.headers.get('content-type') || '') : '';
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      if (ct && ct.indexOf('image/') !== 0) throw new Error('Non-image response');
+      return resp.blob();
+    })
     .then(function(blob) {
+      if (!blob || !blob.size) throw new Error('Empty image');
       return new Promise(function(resolve) {
         var reader = new FileReader();
-        reader.onload = function(e) { _pdfImgCache[url] = e.target.result; resolve(e.target.result); };
+        reader.onload = function(e) { _pdfImgCache[key] = e.target.result; resolve(e.target.result); };
         reader.readAsDataURL(blob);
       });
     })
-    .catch(function() { _pdfImgCache[url] = null; return null; });
+    .catch(function() { _pdfImgCache[key] = null; return null; });
 }
 
-function _pdfPreFetch(submissions) {
-  var urls = [];
-  submissions.forEach(function(r) {
-    (r.gdFileIds || []).forEach(function(id) {
-      urls.push('https://www.googleapis.com/drive/v3/files/' + id + '?alt=media');
+function _pdfSubmissionPhotoSources(submission) {
+  var entries = getResponsePhotoEntries(submission, true).filter(function(entry) {
+    return entry.state === 'ready' && !!entry.fileId;
+  });
+
+  var walkaround = [];
+  var items = {};
+
+  entries.forEach(function(entry) {
+    var source = _pdfEntrySource(entry);
+    if (!source) return;
+    if (entry.kind === 'walkaround') {
+      walkaround.push({ slot: entry.slot || '', index: entry.index || 0, source: source });
+      return;
+    }
+    if (!items[entry.itemId]) items[entry.itemId] = [];
+    items[entry.itemId].push({ index: entry.index || 0, source: source });
+  });
+
+  walkaround.sort(function(a, b) {
+    var order = { front: 0, left: 1, right: 2, rear: 3 };
+    return (order[a.slot] != null ? order[a.slot] : 9) - (order[b.slot] != null ? order[b.slot] : 9);
+  });
+
+  Object.keys(items).forEach(function(itemId) {
+    items[itemId].sort(function(a, b) { return (a.index || 0) - (b.index || 0); });
+  });
+
+  return { walkaround: walkaround, items: items };
+}
+
+function _pdfBuildSourceList(submissions) {
+  var seen = {};
+  var list = [];
+  submissions.forEach(function(submission) {
+    var sources = _pdfSubmissionPhotoSources(submission);
+    sources.walkaround.forEach(function(entry) {
+      var key = _pdfSourceKey(entry.source);
+      if (!seen[key]) { seen[key] = true; list.push(entry.source); }
     });
-    (r.items || []).forEach(function(item) {
-      (item.gdItemPhotoIds || []).forEach(function(id) {
-        urls.push('https://www.googleapis.com/drive/v3/files/' + id + '?alt=media');
+    Object.keys(sources.items).forEach(function(itemId) {
+      sources.items[itemId].forEach(function(entry) {
+        var key = _pdfSourceKey(entry.source);
+        if (!seen[key]) { seen[key] = true; list.push(entry.source); }
       });
     });
   });
-  return Promise.all(urls.map(_pdfFetchImage));
+  return list;
+}
+
+function _pdfPreFetch(submissions) {
+  return Promise.all(_pdfBuildSourceList(submissions).map(_pdfFetchImage));
 }
 
 // ── PDF Export ────────────────────────────────────────────────────────────────
@@ -2320,6 +2769,41 @@ async function exportSubmissionPDF(responseId) {
       return h;
     }
 
+    const photoSummary = getResponsePhotoSummary(r);
+    if (r.photoStorageVersion === 2 && photoSummary.retrievableCount < photoSummary.capturedCount) {
+      throw new Error('This submission has only ' + photoSummary.retrievableCount + '/' + photoSummary.capturedCount + ' retrievable photos. Complete uploads before exporting PDF.');
+    }
+
+    const readyEntries = getResponsePhotoEntries(r, true).filter(function(entry) {
+      return entry.state === 'ready' && !!entry.fileId;
+    });
+    const hasDrive = readyEntries.some(function(entry) { return entry.storage === 'drive'; });
+    const hasMedia = readyEntries.some(function(entry) { return entry.storage === 'media'; });
+
+    if (hasDrive) {
+      if (!_gdConfig || !_gdConfig.refreshToken) {
+        throw new Error('Google Drive photos are present, but Drive is not connected.');
+      }
+      await new Promise(function(resolve, reject) {
+        gdRefreshToken(function() { resolve(); }, function(err) {
+          reject(new Error('Could not refresh Google Drive token: ' + (err && err.message ? err.message : String(err))));
+        });
+      });
+    }
+
+    if (hasMedia) {
+      _pdfMediaCtx = await new Promise(function(resolve) {
+        getFreshMediaSession(function(ctx) { resolve(ctx); }, function() { resolve(null); });
+      });
+      if (!_pdfMediaCtx) {
+        throw new Error('Could not open a fresh MyGeotab session for MediaFile download.');
+      }
+    } else {
+      _pdfMediaCtx = null;
+    }
+
+    const pdfSources = _pdfSubmissionPhotoSources(r);
+
     // Pre-fetch all images for this submission in parallel before layout
     _pdfImgCache = {};
     await _pdfPreFetch([r]);
@@ -2361,13 +2845,8 @@ async function exportSubmissionPDF(responseId) {
     y += 10;
 
     // ── Vehicle photos ────────────────────────────────────────────────────────
-    if (r.gdFileIds && r.gdFileIds.length) {
+    if (pdfSources.walkaround && pdfSources.walkaround.length) {
       sectionTitle('Vehicle Photos');
-
-      // Refresh GD token if needed
-      if (_gdConfig && _gdConfig.refreshToken) {
-        await new Promise(function(resolve) { gdRefreshToken(resolve, resolve); });
-      }
 
       const slotLabels = ['Front', 'Left', 'Right', 'Rear'];
       // Fixed height per row, width fills available space — handles portrait photos correctly
@@ -2379,9 +2858,9 @@ async function exportSubmissionPDF(responseId) {
       checkNewPage(maxImgH * 2 + 24);
 
       const rowHeights = [0, 0];
-      for (let i = 0; i < Math.min(r.gdFileIds.length, 4); i++) {
-        const url = 'https://www.googleapis.com/drive/v3/files/' + r.gdFileIds[i] + '?alt=media';
-        const dataUrl = await fetchImageAsDataUrl(url);
+      for (let i = 0; i < Math.min(pdfSources.walkaround.length, 4); i++) {
+        const source = pdfSources.walkaround[i];
+        const dataUrl = await fetchImageAsDataUrl(source.source);
         if (dataUrl) {
           const col = i % 2;
           const row = Math.floor(i / 2);
@@ -2392,7 +2871,7 @@ async function exportSubmissionPDF(responseId) {
           doc.setFontSize(8);
           doc.setFont('helvetica', 'bold');
           doc.setTextColor(71, 85, 105);
-          doc.text(slotLabels[i], x, imgY + actualH + 4);
+          doc.text(source.slot ? titleCaseSlot(source.slot) : slotLabels[i], x, imgY + actualH + 4);
         }
       }
       y += rowHeights[0] + (rowHeights[1] > 0 ? rowHeights[1] + 10 : 0) + 10;
@@ -2459,15 +2938,15 @@ async function exportSubmissionPDF(responseId) {
         doc.setTextColor(0, 0, 0);
       }
 
-      // Item photos (from GD)
-      if (item.gdItemPhotoIds && item.gdItemPhotoIds.length) {
+      // Item photos
+      var itemSources = (pdfSources.items && pdfSources.items[item.id]) ? pdfSources.items[item.id] : [];
+      if (itemSources.length) {
         const iImgW = 40;
         const iMaxH = 35;
         checkNewPage(iMaxH + 10);
         let maxH = 0;
-        for (let j = 0; j < item.gdItemPhotoIds.length; j++) {
-          const url = 'https://www.googleapis.com/drive/v3/files/' + item.gdItemPhotoIds[j] + '?alt=media';
-          const dataUrl = await fetchImageAsDataUrl(url);
+        for (let j = 0; j < itemSources.length; j++) {
+          const dataUrl = await fetchImageAsDataUrl(itemSources[j].source);
           if (dataUrl) {
             const x = margin + 7 + j * (iImgW + 3);
             if (x + iImgW > W - margin) break;
@@ -2501,6 +2980,7 @@ async function exportSubmissionPDF(responseId) {
     alert('PDF export failed: ' + e.message);
     console.error(e);
   } finally {
+    _pdfMediaCtx = null;
     btn.innerHTML = origText;
     btn.disabled = false;
   }
@@ -3766,9 +4246,12 @@ function renderIssueCard(issue) {
     + '<p style="font-size:14px;font-weight:600;color:#334155;margin:0 0 4px 0;">✗ ' + (issue.itemLabel || '—') + '</p>'
     + (issue.itemSides && issue.itemSides.length ? '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px;">' + issue.itemSides.map(function(s){ return '<span style="font-size:11px;font-weight:600;padding:2px 8px;background:#fee2e2;color:#dc2626;border-radius:20px;">' + s + '</span>'; }).join('') + '</div>' : '')
     + (issue.itemNote ? '<p style="font-size:13px;color:#64748b;margin:0;font-style:italic;">' + issue.itemNote + '</p>' : '')
-    + (issue.gdItemPhotoIds && issue.gdItemPhotoIds.length
-        ? '<button onclick="openItemPhotoPopoverById(\'' + issue.submissionId + '\',\'' + issue.itemId + '\')" style="margin-top:8px;font-size:12px;color:#dc2626;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:4px 10px;cursor:pointer;">📷 ' + issue.gdItemPhotoIds.length + ' photo' + (issue.gdItemPhotoIds.length>1?'s':'') + '</button>'
-        : '')
+    + (function() {
+        var issuePhotoCount = (issue.gdItemPhotoIds ? issue.gdItemPhotoIds.length : 0)
+          + (issue.itemMediaFileIds ? issue.itemMediaFileIds.length : 0);
+        if (!issuePhotoCount) return '';
+        return '<button onclick="openItemPhotoPopoverById(\'' + issue.submissionId + '\',\'' + issue.itemId + '\')" style="margin-top:8px;font-size:12px;color:#dc2626;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:4px 10px;cursor:pointer;">📷 ' + issuePhotoCount + ' photo' + (issuePhotoCount>1?'s':'') + '</button>';
+      })()
     + '</div>'
     + commentsHtml
     + '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">'
@@ -3968,77 +4451,86 @@ function renderFailureFrequency() {
 
 // ── Photos Panel ──────────────────────────────────────────────────────────────
 function openPhotosPanel() {
-
   var panel = document.getElementById('photosPanel');
   var body  = document.getElementById('photosPanelBody');
   var sub   = document.getElementById('photosPanelSubtitle');
 
-  var withPhotos = filtered.filter(function(r) { return r.photoCount > 0; });
-  sub.textContent = withPhotos.length + ' submission' + (withPhotos.length !== 1 ? 's' : '') + ' with photos';
+  var withPhotos = filtered.filter(function(r) { return getResponsePhotoSummary(r).capturedCount > 0; });
+  sub.textContent = withPhotos.length + ' submission' + (withPhotos.length !== 1 ? 's' : '') + ' with captured photos';
 
   if (!withPhotos.length) {
     body.innerHTML = '<div style="text-align:center;padding:60px 0;color:#94a3b8;"><p style="font-size:16px;">No photos in the current date range.</p></div>';
-  } else {
-    body.innerHTML = withPhotos.map(function(r) {
-      var dt = new Date(r.submittedAt);
-      var slotLabels = ['Front','Left','Right','Rear'];
-      var hasGD = r.gdFileIds && r.gdFileIds.length;
-
-      var photosHtml = hasGD
-        ? '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:8px;">'
-          + r.gdFileIds.slice(0,4).map(function(fileId, i) {
-              return '<div style="position:relative;cursor:pointer;" onclick="openPhotoPopover(event,\'' + r.id + '\',' + r.photoCount + ')">'
-                + '<div id="pp-' + r.id + '-' + i + '" style="aspect-ratio:4/3;background:#f1f5f9;border-radius:10px;overflow:hidden;display:flex;align-items:center;justify-content:center;">'
-                + '<svg style="width:24px;height:24px;color:#cbd5e1;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/></svg>'
-                + '</div>'
-                + '<p style="font-size:10px;font-weight:600;color:#94a3b8;text-align:center;margin:4px 0 0 0;">' + (slotLabels[i] || '') + '</p>'
-                + '</div>';
-            }).join('') + '</div>'
-        : '<p style="font-size:13px;color:#94a3b8;margin-bottom:8px;">Photos stored in MyGeotab (may have expired)</p>';
-
-      return '<div style="background:white;border-radius:16px;padding:20px;margin-bottom:16px;border:1px solid #e2e8f0;box-shadow:0 1px 4px rgba(0,0,0,0.06);" id="ppCard-' + r.id + '">'
-        + '<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:16px;">'
-        + '<div>'
-        + '<p style="font-weight:700;font-size:15px;color:#1e293b;margin:0;">' + (r.deviceName || '—') + '</p>'
-        + '<p style="font-size:13px;color:#64748b;margin:4px 0 0 0;">' + (r.driverName || '—') + ' · ' + dt.toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'}) + ' · ' + dt.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}) + '</p>'
-        + '</div>'
-        + '<span style="background:' + (r.overallStatus==='pass'?'#dcfce7':'#fee2e2') + ';color:' + (r.overallStatus==='pass'?'#15803d':'#dc2626') + ';font-size:12px;font-weight:700;padding:4px 10px;border-radius:20px;">' + r.overallStatus.toUpperCase() + '</span>'
-        + '</div>'
-        + photosHtml
-        + '<div style="display:flex;gap:8px;margin-top:12px;">'
-        + '<button onclick="togglePhotoDetail(\'' + r.id + '\')" style="font-size:12px;color:#0047BB;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:6px 12px;cursor:pointer;">View details</button>'
-        + '<button onclick="exportSubmissionPDF(\'' + r.id + '\')" style="font-size:12px;color:#0047BB;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:6px 12px;cursor:pointer;">Export PDF</button>'
-        + '</div>'
-        + '<div id="ppDetail-' + r.id + '" style="display:none;margin-top:12px;border-top:1px solid #f1f5f9;padding-top:12px;">'
-        + (r.items || []).map(function(item) {
-            var isFail = item.value === 'fail' || item.value === 'no';
-            return '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #f8fafc;">'
-              + '<span style="font-size:13px;font-weight:700;color:' + (isFail?'#dc2626':'#16a34a') + ';">' + (isFail?'✗':'✓') + '</span>'
-              + '<span style="font-size:13px;color:#334155;flex:1;">' + item.label + '</span>'
-              + '<span style="font-size:12px;font-weight:600;color:' + (isFail?'#dc2626':'#16a34a') + ';text-transform:uppercase;">' + (item.value||'—') + '</span>'
-              + '</div>';
-          }).join('')
-        + '</div>'
-        + '</div>';
-    }).join('');
-
-    // Lazy-load thumbnails for GD photos
-    withPhotos.forEach(function(r) {
-      if (!r.gdFileIds || !r.gdFileIds.length) return;
-      gdRefreshToken(function(token) {
-        r.gdFileIds.slice(0,4).forEach(function(fileId, i) {
-          fetch('https://www.googleapis.com/drive/v3/files/' + fileId + '?alt=media', {
-            headers: { 'Authorization': 'Bearer ' + token }
-          })
-          .then(function(res) { return res.blob(); })
-          .then(function(blob) {
-            var el = document.getElementById('pp-' + r.id + '-' + i);
-            if (el) { el.innerHTML = '<img src="' + URL.createObjectURL(blob) + '" style="width:100%;height:100%;object-fit:cover;">'; }
-          }).catch(function() {});
-        });
-      }, function() {});
-    });
+    panel.style.display = 'flex';
+    return;
   }
+
+  body.innerHTML = withPhotos.map(function(r) {
+    var dt = new Date(r.submittedAt);
+    var summary = getResponsePhotoSummary(r);
+    var previewEntries = getResponsePhotoEntries(r, true)
+      .filter(function(e) { return e.state === 'ready' && e.fileId; })
+      .slice(0, 4);
+
+    var photosHtml = previewEntries.length
+      ? '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:8px;">'
+        + previewEntries.map(function(entry, i) {
+            return '<div style="position:relative;cursor:pointer;" onclick="openPhotoPopover(event,\'' + r.id + '\',' + summary.retrievableCount + ',' + summary.capturedCount + ')">'
+              + '<div id="pp-' + r.id + '-' + i + '" style="aspect-ratio:4/3;background:#f1f5f9;border-radius:10px;overflow:hidden;display:flex;align-items:center;justify-content:center;">'
+              + '<svg style="width:24px;height:24px;color:#cbd5e1;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/></svg>'
+              + '</div>'
+              + '<p style="font-size:10px;font-weight:600;color:#94a3b8;text-align:center;margin:4px 0 0 0;">' + htmlSafe(entry.label) + '</p>'
+              + '</div>';
+          }).join('') + '</div>'
+      : '<p style="font-size:13px;color:#94a3b8;margin-bottom:8px;">No retrievable photos for this submission.</p>';
+
+    return '<div style="background:white;border-radius:16px;padding:20px;margin-bottom:16px;border:1px solid #e2e8f0;box-shadow:0 1px 4px rgba(0,0,0,0.06);" id="ppCard-' + r.id + '">'
+      + '<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:16px;">'
+      + '<div>'
+      + '<p style="font-weight:700;font-size:15px;color:#1e293b;margin:0;">' + (r.deviceName || '—') + '</p>'
+      + '<p style="font-size:13px;color:#64748b;margin:4px 0 0 0;">' + (r.driverName || '—') + ' · ' + dt.toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'}) + ' · ' + dt.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}) + '</p>'
+      + '<p style="font-size:12px;color:#64748b;margin:6px 0 0 0;">Stored: ' + summary.retrievableCount + '/' + summary.capturedCount + ' · Pending: ' + summary.pendingCount + '</p>'
+      + '</div>'
+      + '<span style="background:' + (r.overallStatus==='pass'?'#dcfce7':'#fee2e2') + ';color:' + (r.overallStatus==='pass'?'#15803d':'#dc2626') + ';font-size:12px;font-weight:700;padding:4px 10px;border-radius:20px;">' + r.overallStatus.toUpperCase() + '</span>'
+      + '</div>'
+      + photosHtml
+      + '<div style="display:flex;gap:8px;margin-top:12px;">'
+      + '<button onclick="openPhotoPopover(event,\'' + r.id + '\',' + summary.retrievableCount + ',' + summary.capturedCount + ')" style="font-size:12px;color:#0047BB;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:6px 12px;cursor:pointer;">Open photos</button>'
+      + '<button onclick="togglePhotoDetail(\'' + r.id + '\')" style="font-size:12px;color:#0047BB;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:6px 12px;cursor:pointer;">View details</button>'
+      + '<button onclick="exportSubmissionPDF(\'' + r.id + '\')" style="font-size:12px;color:#0047BB;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:6px 12px;cursor:pointer;">Export PDF</button>'
+      + '</div>'
+      + '<div id="ppDetail-' + r.id + '" style="display:none;margin-top:12px;border-top:1px solid #f1f5f9;padding-top:12px;">'
+      + (r.items || []).map(function(item) {
+          var isFail = item.value === 'fail' || item.value === 'no';
+          var itemEntries = getItemPhotoEntries(r, item.id, true);
+          var itemReady = itemEntries.filter(function(e) { return e.state === 'ready' && e.fileId; }).length;
+          return '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #f8fafc;">'
+            + '<span style="font-size:13px;font-weight:700;color:' + (isFail?'#dc2626':'#16a34a') + ';">' + (isFail?'✗':'✓') + '</span>'
+            + '<span style="font-size:13px;color:#334155;flex:1;">' + item.label + '</span>'
+            + '<span style="font-size:12px;color:#64748b;">' + itemReady + '/' + itemEntries.length + ' photos</span>'
+            + '<span style="font-size:12px;font-weight:600;color:' + (isFail?'#dc2626':'#16a34a') + ';text-transform:uppercase;">' + (item.value||'—') + '</span>'
+            + '</div>';
+        }).join('')
+      + '</div>'
+      + '</div>';
+  }).join('');
+
+  withPhotos.forEach(function(r) {
+    var previewEntries = getResponsePhotoEntries(r, true)
+      .filter(function(e) { return e.state === 'ready' && e.fileId; })
+      .slice(0, 4);
+    if (!previewEntries.length) return;
+    loadPhotoCards(previewEntries, function(cards) {
+      cards.forEach(function(card, i) {
+        var el = document.getElementById('pp-' + r.id + '-' + i);
+        if (!el) return;
+        if (card.src) {
+          el.innerHTML = '<img src="' + card.src + '" style="width:100%;height:100%;object-fit:cover;">';
+        } else {
+          el.innerHTML = '<span style="font-size:11px;color:#64748b;font-weight:600;">' + htmlSafe(card.message || 'Unavailable') + '</span>';
+        }
+      });
+    });
+  });
 
   panel.style.display = 'flex';
 }
