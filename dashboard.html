@@ -97,7 +97,7 @@
   </div>
   <span style="font-size:15px;font-weight:700;color:#1e293b;">Check-In Dashboard</span>
   <span id="dbBadge" style="font-size:11px;font-weight:600;background:#eff6ff;color:#1d4ed8;padding:2px 10px;border-radius:6px;border:1px solid #bfdbfe;">—</span>
-  <span style="font-size:10px;color:#cbd5e1;">v7.7</span>
+  <span style="font-size:10px;color:#cbd5e1;">v7.8</span>
   <button id="storageBtn" onclick="openStoragePanel()" style="margin-left:auto;display:flex;align-items:center;gap:8px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:7px 14px;cursor:pointer;color:#64748b;font-size:12px;font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,0.06);transition:box-shadow .15s;">
     <svg style="width:14px;height:14px;flex-shrink:0;" fill="none" stroke="#94a3b8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z"/></svg>
     <div style="display:flex;flex-direction:column;align-items:flex-start;gap:3px;">
@@ -909,6 +909,21 @@ function titleCaseSlot(slot) {
   return slot.charAt(0).toUpperCase() + slot.slice(1);
 }
 
+function formatSignoffDate(iso, tzOffsetMinutes) {
+  if (!iso) return 'Signed date unavailable';
+  var dt = new Date(iso);
+  var local = dt.toLocaleString('en-GB', {
+    day: '2-digit', month: 'short', year: 'numeric',
+    hour: '2-digit', minute: '2-digit'
+  });
+  var offset = typeof tzOffsetMinutes === 'number' ? -tzOffsetMinutes : -dt.getTimezoneOffset();
+  var sign = offset >= 0 ? '+' : '-';
+  var abs = Math.abs(offset);
+  var hh = String(Math.floor(abs / 60)).padStart(2, '0');
+  var mm = String(abs % 60).padStart(2, '0');
+  return local + ' (UTC' + sign + hh + ':' + mm + ')';
+}
+
 function findItemLabel(response, itemId) {
   var item = (response.items || []).find(function(i) { return i.id === itemId; });
   return item && item.label ? item.label : 'Checklist item';
@@ -1060,6 +1075,39 @@ function getResponsePhotoEntries(response, includeNonReady) {
   return entries;
 }
 
+function getSignoffPhotoEntry(response, includeNonReady) {
+  var signoff = response && response.signoff;
+  if (!signoff) return null;
+  var includeMissing = includeNonReady === true;
+  var mediaId = signoff.cardMediaFileId || '';
+  var driveId = signoff.cardDriveFileId || '';
+  var storage = mediaId ? 'media' : (driveId ? 'drive' : 'none');
+  var fileId = storage === 'media' ? mediaId : driveId;
+  var state = fileId ? 'ready' : ((signoff.archiveStatus === 'pending') ? 'pending' : 'missing');
+  if (!includeMissing && (!fileId || state !== 'ready')) return null;
+  return {
+    key: 'signoff:card',
+    kind: 'signoff',
+    slot: '',
+    itemId: '',
+    index: 999,
+    storage: storage,
+    fileId: fileId,
+    mediaFileId: mediaId,
+    gdFileId: driveId,
+    state: state,
+    error: '',
+    label: 'Sign-off'
+  };
+}
+
+function getDisplayPhotoEntries(response, includeNonReady) {
+  var entries = getResponsePhotoEntries(response, includeNonReady);
+  var signoffEntry = getSignoffPhotoEntry(response, includeNonReady);
+  if (signoffEntry) entries.push(signoffEntry);
+  return entries;
+}
+
 function isDriveArchiveRequired(response) {
   if (typeof response.driveArchiveRequired === 'boolean') return response.driveArchiveRequired;
   var match = String(response.clientBuild || '').match(/^v20\.(\d+)/);
@@ -1067,7 +1115,7 @@ function isDriveArchiveRequired(response) {
 }
 
 function getResponsePhotoSummary(response) {
-  var entries = getResponsePhotoEntries(response, true);
+  var entries = getDisplayPhotoEntries(response, true);
   var summary = {
     capturedCount: entries.length,
     retrievableCount: 0,
@@ -1964,11 +2012,21 @@ function expandedRow(r) {
 
   const archiveRetryHtml = r.photoStorageVersion === 2
       && isDriveArchiveRequired(r)
-      && photoSummary.driveArchivePendingCount > 0
-      && (r.photoManifest || []).some(function(entry) { return entry.mediaFileId && !entry.gdFileId; })
+      && (photoSummary.driveArchivePendingCount > 0
+        || (r.signoff && r.signoff.cardMediaFileId && !r.signoff.cardDriveFileId))
+      && ((r.photoManifest || []).some(function(entry) { return entry.mediaFileId && !entry.gdFileId; })
+        || (r.signoff && r.signoff.cardMediaFileId && !r.signoff.cardDriveFileId))
     ? '<button onclick="retryDriveArchive(\'' + r.id + '\',this)" '
       + 'class="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-800 text-sm font-semibold rounded-xl transition-colors">'
-      + 'Retry Drive archive (' + photoSummary.driveArchivePendingCount + ')</button>'
+      + 'Retry Drive archive (' + (photoSummary.driveArchivePendingCount + ((r.signoff && r.signoff.cardMediaFileId && !r.signoff.cardDriveFileId) ? 1 : 0)) + ')</button>'
+    : '';
+
+  const signoffHtml = r.signoff
+    ? '<div class="mt-4 bg-slate-50 border border-slate-200 rounded-xl p-3">'
+      + '<p class="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-2">Operational sign-off</p>'
+      + '<p class="text-sm font-semibold text-slate-700">' + htmlSafe(r.signoff.signeeName || 'Signee') + '</p>'
+      + '<p class="text-xs text-slate-500 mt-1">' + htmlSafe(formatSignoffDate(r.signoff.signedAtUtc, r.signoff.timezoneOffsetMinutes)) + '</p>'
+      + '</div>'
     : '';
 
   return `
@@ -1983,6 +2041,7 @@ function expandedRow(r) {
             <p class="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-3">Photos (${photoSummary.retrievableCount}/${photoSummary.capturedCount})</p>
             ${photosHtml}
             ${photoStatusHtml}
+            ${signoffHtml}
             <div class="mt-5 flex flex-col gap-2">
               ${archiveRetryHtml}
               <button onclick="exportSubmissionPDF('${r.id}')"
@@ -2196,7 +2255,7 @@ function executeDeleteSubmission(responseId) {
   var r = RESPONSES.find(function(x) { return x.id === responseId; });
   if (!r || !r._addInDataId) { console.warn('No AddInData ID for', responseId); return; }
 
-  var entries = getResponsePhotoEntries(r, true).filter(function(e) { return e.state === 'ready' && !!e.fileId; });
+  var entries = getDisplayPhotoEntries(r, true).filter(function(e) { return e.state === 'ready' && !!e.fileId; });
   var seenDrive = {};
   var seenMedia = {};
   var driveIds = [];
@@ -2219,6 +2278,14 @@ function executeDeleteSubmission(responseId) {
       driveIds.push(entry.gdFileId);
     }
   });
+  if (r.signoff && r.signoff.cardDriveFileId && !seenDrive[r.signoff.cardDriveFileId]) {
+    seenDrive[r.signoff.cardDriveFileId] = true;
+    driveIds.push(r.signoff.cardDriveFileId);
+  }
+  if (r.signoff && r.signoff.cardMediaFileId && !seenMedia[r.signoff.cardMediaFileId]) {
+    seenMedia[r.signoff.cardMediaFileId] = true;
+    mediaIds.push(r.signoff.cardMediaFileId);
+  }
 
   function deleteDriveFiles(onDone) {
     if (!driveIds.length) { onDone([]); return; }
@@ -2362,11 +2429,11 @@ function buildMediaUrl(mediaCtx, mediaId) {
 function fetchImageCard(entry, driveToken, mediaCtx) {
   return new Promise(function(resolve) {
     if (entry.state === 'pending') {
-      resolve({ src: '', label: entry.label, status: 'pending', message: 'Pending', detail: entry.error || '' });
+      resolve({ src: '', label: entry.label, kind: entry.kind || '', status: 'pending', message: 'Pending', detail: entry.error || '' });
       return;
     }
     if (entry.state !== 'ready' || !entry.fileId) {
-      resolve({ src: '', label: entry.label, status: 'missing', message: 'Missing', detail: entry.error || '' });
+      resolve({ src: '', label: entry.label, kind: entry.kind || '', status: 'missing', message: 'Missing', detail: entry.error || '' });
       return;
     }
 
@@ -2374,19 +2441,19 @@ function fetchImageCard(entry, driveToken, mediaCtx) {
     var options = {};
     if (entry.storage === 'drive') {
       if (!driveToken) {
-        resolve({ src: '', label: entry.label, status: 'unavailable', message: 'Drive auth needed', detail: '' });
+        resolve({ src: '', label: entry.label, kind: entry.kind || '', status: 'unavailable', message: 'Drive auth needed', detail: '' });
         return;
       }
       url = 'https://www.googleapis.com/drive/v3/files/' + entry.fileId + '?alt=media';
       options.headers = { 'Authorization': 'Bearer ' + driveToken };
     } else if (entry.storage === 'media') {
       if (!mediaCtx) {
-        resolve({ src: '', label: entry.label, status: 'unavailable', message: 'Session needed', detail: '' });
+        resolve({ src: '', label: entry.label, kind: entry.kind || '', status: 'unavailable', message: 'Session needed', detail: '' });
         return;
       }
       url = buildMediaUrl(mediaCtx, entry.fileId);
     } else {
-      resolve({ src: '', label: entry.label, status: 'missing', message: 'Missing', detail: entry.error || '' });
+      resolve({ src: '', label: entry.label, kind: entry.kind || '', status: 'missing', message: 'Missing', detail: entry.error || '' });
       return;
     }
 
@@ -2399,10 +2466,10 @@ function fetchImageCard(entry, driveToken, mediaCtx) {
       })
       .then(function(blob) {
         if (!blob || !blob.size) throw new Error('Empty image');
-        resolve({ src: URL.createObjectURL(blob), label: entry.label, status: 'ready', message: '', detail: '' });
+        resolve({ src: URL.createObjectURL(blob), label: entry.label, kind: entry.kind || '', status: 'ready', message: '', detail: '' });
       })
       .catch(function(err) {
-        resolve({ src: '', label: entry.label, status: 'unavailable', message: 'Unavailable', detail: err && err.message ? err.message : String(err) });
+        resolve({ src: '', label: entry.label, kind: entry.kind || '', status: 'unavailable', message: 'Unavailable', detail: err && err.message ? err.message : String(err) });
       });
   });
 }
@@ -2454,7 +2521,9 @@ function openPhotoPopover(event, responseId, retrievableCount, capturedCount) {
   _activePhotoCards = [];
   _activePhotoSrcs = [];
 
-  document.getElementById('photoPopoverTitle').textContent = ready + '/' + total + ' retrievable';
+  var hasSignoffCard = !!getSignoffPhotoEntry(response, true);
+  document.getElementById('photoPopoverTitle').textContent = ready + '/' + total + ' retrievable'
+    + (hasSignoffCard ? ' + sign-off' : '');
   document.getElementById('photoPopoverGrid').innerHTML = '<p class="text-xs text-slate-400">Loading…</p>';
 
   var anchor = event.target && event.target.closest ? event.target.closest('button') : null;
@@ -2531,15 +2600,21 @@ function renderPhotoThumbs() {
   var readyIndex = 0;
   var html = _activePhotoCards.map(function(card) {
     var label = htmlSafe(card.label || 'Photo');
+    var badge = card.kind === 'signoff'
+      ? '<span style="position:absolute;top:4px;left:4px;font-size:10px;font-weight:700;background:#0047BB;color:#fff;border-radius:10px;padding:1px 6px;">Sign-off</span>'
+      : '';
     if (card.src) {
       var openIdx = readyIndex;
       readyIndex++;
       return '<div style="display:flex;flex-direction:column;gap:4px;">'
+        + '<div style="position:relative;width:100px;height:75px;">'
         + '<img src="' + card.src + '" alt="' + label + '" '
         + 'style="width:100px;height:75px;object-fit:cover;border-radius:8px;cursor:pointer;border:2px solid transparent;transition:border-color .15s;" '
         + 'onmouseover="this.style.borderColor=\'#0047BB\'" '
         + 'onmouseout="this.style.borderColor=\'transparent\'" '
         + 'onclick="openPhotoFullView(' + openIdx + ')">'
+        + badge
+        + '</div>'
         + '<p style="font-size:11px;color:#64748b;margin:0;line-height:1.2;">' + label + '</p></div>';
     }
     var status = htmlSafe(card.message || 'Unavailable');
@@ -2815,6 +2890,48 @@ function dashArchiveMergeDriveId(addInDataId, responseId, sourceEntry, driveFile
   });
 }
 
+function dashArchiveMergeSignoffDriveId(addInDataId, responseId, driveFileId, attempt) {
+  attempt = attempt || 0;
+  return dashArchiveGetResponse(addInDataId).then(function(record) {
+    var details = record.details;
+    if (details.id !== responseId) throw new Error('Submission record changed during sign-off archive retry');
+    if (!details.signoff || !details.signoff.cardMediaFileId) {
+      throw new Error('Sign-off card no longer exists on this submission');
+    }
+    details.signoff.cardDriveFileId = details.signoff.cardDriveFileId || driveFileId;
+    details.signoff.archiveStatus = 'complete';
+    if (JSON.stringify(details).length > 9500) {
+      var sizeError = new Error('Submission metadata is too large to update safely');
+      sizeError.noRetry = true;
+      throw sizeError;
+    }
+    return new Promise(function(resolve, reject) {
+      record.details = details;
+      _api.call('Set', { typeName: 'AddInData', entity: record }, function() {
+        dashArchiveGetResponse(record.id).then(function(verifiedRecord) {
+          var verifiedDetails = verifiedRecord.details;
+          var verifiedSignoff = verifiedDetails.signoff || {};
+          if (verifiedSignoff.cardDriveFileId !== details.signoff.cardDriveFileId) {
+            reject(new Error('Sign-off archive update conflicted with another writer'));
+            return;
+          }
+          verifiedDetails._addInDataId = verifiedRecord.id;
+          var index = RESPONSES.findIndex(function(item) { return item.id === responseId; });
+          if (index >= 0) RESPONSES[index] = verifiedDetails;
+          resolve(verifiedDetails);
+        }, reject);
+      }, reject);
+    });
+  }).catch(function(err) {
+    if (err && err.noRetry) throw err;
+    if (attempt >= 2) throw err;
+    return new Promise(function(resolve) { setTimeout(resolve, 300 * (attempt + 1)); })
+      .then(function() {
+        return dashArchiveMergeSignoffDriveId(addInDataId, responseId, driveFileId, attempt + 1);
+      });
+  });
+}
+
 async function retryDriveArchive(responseId, button) {
   if (_dashArchiveBusy[responseId]) return;
   var response = RESPONSES.find(function(item) { return item.id === responseId; });
@@ -2832,6 +2949,14 @@ async function retryDriveArchive(responseId, button) {
     var pending = (response.photoManifest || []).filter(function(entry) {
       return entry.mediaFileId && !entry.gdFileId;
     });
+    if (response.signoff && response.signoff.cardMediaFileId && !response.signoff.cardDriveFileId) {
+      pending.push({
+        key: 'signoff:card',
+        kind: 'signoff',
+        mediaFileId: response.signoff.cardMediaFileId,
+        gdFileId: ''
+      });
+    }
     if (!pending.length) {
       renderTable();
       return;
@@ -2856,14 +2981,21 @@ async function retryDriveArchive(responseId, button) {
       }
       var fileName = entry.kind === 'item'
         ? 'item_' + entry.itemId + '_photo' + ((entry.index || 0) + 1) + '.jpg'
-        : 'photo_' + ({ front: 1, left: 2, right: 3, rear: 4 }[entry.slot] || ((entry.index || 0) + 1)) + '.jpg';
+        : (entry.kind === 'signoff'
+            ? ('checkin_' + response.id + '_operational_signoff.jpg').toLowerCase()
+            : 'photo_' + ({ front: 1, left: 2, right: 3, rear: 4 }[entry.slot] || ((entry.index || 0) + 1)) + '.jpg');
+      
       var archiveKey = response.id + ':' + entry.key;
       var driveFileId = await dashArchiveFindFile(token, archiveKey, folderId);
       if (!driveFileId) {
         var blob = await dashArchiveDownloadMedia(mediaContext, entry.mediaFileId);
         driveFileId = await dashArchiveUploadBlob(token, blob, fileName, folderId, archiveKey);
       }
-      response = await dashArchiveMergeDriveId(response._addInDataId, response.id, entry, driveFileId);
+      if (entry.kind === 'signoff') {
+        response = await dashArchiveMergeSignoffDriveId(response._addInDataId, response.id, driveFileId);
+      } else {
+        response = await dashArchiveMergeDriveId(response._addInDataId, response.id, entry, driveFileId);
+      }
     }
 
     renderTable();
@@ -2996,18 +3128,23 @@ function _pdfFetchImage(sourceOrUrl) {
 }
 
 function _pdfSubmissionPhotoSources(submission) {
-  var entries = getResponsePhotoEntries(submission, true).filter(function(entry) {
+  var entries = getDisplayPhotoEntries(submission, true).filter(function(entry) {
     return entry.state === 'ready' && !!entry.fileId;
   });
 
   var walkaround = [];
   var items = {};
+  var signoff = null;
 
   entries.forEach(function(entry) {
     var source = _pdfEntrySource(entry);
     if (!source) return;
     if (entry.kind === 'walkaround') {
       walkaround.push({ slot: entry.slot || '', index: entry.index || 0, source: source });
+      return;
+    }
+    if (entry.kind === 'signoff') {
+      signoff = { source: source };
       return;
     }
     if (!items[entry.itemId]) items[entry.itemId] = [];
@@ -3023,7 +3160,7 @@ function _pdfSubmissionPhotoSources(submission) {
     items[itemId].sort(function(a, b) { return (a.index || 0) - (b.index || 0); });
   });
 
-  return { walkaround: walkaround, items: items };
+  return { walkaround: walkaround, items: items, signoff: signoff };
 }
 
 function _pdfBuildSourceList(submissions) {
@@ -3041,6 +3178,10 @@ function _pdfBuildSourceList(submissions) {
         if (!seen[key]) { seen[key] = true; list.push(entry.source); }
       });
     });
+    if (sources.signoff && sources.signoff.source) {
+      var signoffKey = _pdfSourceKey(sources.signoff.source);
+      if (!seen[signoffKey]) { seen[signoffKey] = true; list.push(sources.signoff.source); }
+    }
   });
   return list;
 }
@@ -3122,7 +3263,7 @@ async function exportSubmissionPDF(responseId) {
       throw new Error('This submission has only ' + photoSummary.retrievableCount + '/' + photoSummary.capturedCount + ' retrievable photos. Complete uploads before exporting PDF.');
     }
 
-    const readyEntries = getResponsePhotoEntries(r, true).filter(function(entry) {
+    const readyEntries = getDisplayPhotoEntries(r, true).filter(function(entry) {
       return entry.state === 'ready' && !!entry.fileId;
     });
     const hasDrive = readyEntries.some(function(entry) { return entry.storage === 'drive'; });
@@ -3309,6 +3450,31 @@ async function exportSubmissionPDF(responseId) {
       doc.setDrawColor(226, 232, 240);
       doc.line(margin, y, W - margin, y);
       y += 3;
+    }
+
+    if (r.signoff) {
+      sectionTitle('Operational sign-off');
+      checkNewPage(18);
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(100, 116, 139);
+      doc.text('SIGNEE', margin, y);
+      doc.text('SIGNED ON', margin + contentW / 2, y);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(30, 41, 59);
+      doc.text(String(r.signoff.signeeName || '—'), margin, y + 4);
+      doc.text(formatSignoffDate(r.signoff.signedAtUtc, r.signoff.timezoneOffsetMinutes), margin + contentW / 2, y + 4);
+      y += 10;
+
+      if (pdfSources.signoff && pdfSources.signoff.source) {
+        const signoffImage = await fetchImageAsDataUrl(pdfSources.signoff.source);
+        if (signoffImage) {
+          checkNewPage(90);
+          await addImagePreserveAspect(signoffImage, margin, y, contentW, 80);
+          y += 84;
+        }
+      }
+      doc.setTextColor(0, 0, 0);
     }
 
     // ── Footer ────────────────────────────────────────────────────────────────
@@ -4023,6 +4189,7 @@ function getDriveFileIdsForResponse(response) {
   (response.photoManifest || []).forEach(function(entry) {
     if (entry.gdFileId) ids[entry.gdFileId] = true;
   });
+  if (response.signoff && response.signoff.cardDriveFileId) ids[response.signoff.cardDriveFileId] = true;
   return Object.keys(ids);
 }
 
@@ -4237,6 +4404,10 @@ function markOneDriveArchiveDeleted(responseId, deletedIds, attempt) {
     (details.photoManifest || []).forEach(function(entry) {
       if (entry.gdFileId && deleted[entry.gdFileId]) delete entry.gdFileId;
     });
+    if (details.signoff && details.signoff.cardDriveFileId && deleted[details.signoff.cardDriveFileId]) {
+      delete details.signoff.cardDriveFileId;
+      details.signoff.archiveStatus = 'pending';
+    }
 
     var remainingIds = getDriveFileIdsForResponse(details);
     details.driveArchivedPhotoCount = (details.photoManifest || []).filter(function(entry) { return !!entry.gdFileId; }).length;

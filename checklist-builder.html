@@ -37,7 +37,7 @@
     <svg style="width:18px;height:18px;" fill="none" stroke="white" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
   </div>
   <span style="font-size:15px;font-weight:700;color:#1e293b;">Checklist Builder</span>
-  <span style="font-size:10px;color:#cbd5e1;">v1.9</span>
+  <span style="font-size:10px;color:#cbd5e1;">v2.0</span>
   <button id="driveBtn" onclick="openDriveSetup()" style="margin-left:auto;display:flex;align-items:center;gap:6px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:7px 14px;cursor:pointer;color:#64748b;font-size:12px;font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,0.06);">
     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z"/></svg>
     <span id="driveBtnLabel">Connect Storage</span>
@@ -221,6 +221,20 @@
                        border-radius:999px;cursor:pointer;background:#0047BB;transition:background .2s;
                        -webkit-appearance:none;appearance:none;">
           <span data-knob style="position:absolute;top:3px;left:23px;width:18px;height:18px;background:#fff;
+                       border-radius:50%;box-shadow:0 1px 2px rgba(0,0,0,.3);transition:left .2s;"></span>
+        </button>
+      </div>
+      <div class="flex items-center justify-between mb-4 pt-3 border-t border-slate-100">
+        <div>
+          <p class="text-sm font-semibold text-slate-700">Require final review and signature</p>
+          <p class="text-xs text-slate-400 mt-0.5">User must review responses and add a signee name + signature before upload</p>
+        </div>
+        <button type="button" id="reqSignoff" role="switch" aria-checked="false" class="ml-4"
+                aria-label="Require final review and signature" onclick="switchToggle('reqSignoff')"
+                style="position:relative;flex-shrink:0;width:44px;height:24px;padding:0;border:0;
+                       border-radius:999px;cursor:pointer;background:#cbd5e1;transition:background .2s;
+                       -webkit-appearance:none;appearance:none;">
+          <span data-knob style="position:absolute;top:3px;left:3px;width:18px;height:18px;background:#fff;
                        border-radius:50%;box-shadow:0 1px 2px rgba(0,0,0,.3);transition:left .2s;"></span>
         </button>
       </div>
@@ -674,7 +688,8 @@ let _serverSnapshot = {};
 function templateFingerprint(t) {
   return JSON.stringify({
     name: t.name, assignTo: t.assignTo, assigned: t.assigned,
-    requirePhotos: t.requirePhotos, tripType: t.tripType || 'na', items: t.items
+    requirePhotos: t.requirePhotos, requireSignoff: t.requireSignoff === true,
+    tripType: t.tripType || 'na', items: t.items
   });
 }
 
@@ -687,7 +702,11 @@ function applyAddInData(results) {
   results.forEach(function(r) {
     const d = r.details;
     if (!d) return;
-    if (d.type === 'ChecklistTemplate') { d.addInDataId = r.id; loaded.push(d); }
+    if (d.type === 'ChecklistTemplate') {
+      d.addInDataId = r.id;
+      d.requireSignoff = d.requireSignoff === true;
+      loaded.push(d);
+    }
     else if (d.type === 'CustomItemLibrary') {
       LIBRARY = { addInDataId: r.id, items: Array.isArray(d.items) ? d.items : [], favourites: Array.isArray(d.favourites) ? d.favourites : [] };
     }
@@ -724,7 +743,7 @@ function applyAddInData(results) {
     if (!templates.some(t => t.id === activeId)) activeId = templates[0].id;
   } else {
     // Nothing saved yet — start with one blank template
-    const blank = { id: 'cl-' + Date.now(), name: 'New Checklist', assignTo: 'driver', assigned: [], requirePhotos: true, tripType: 'na', items: [] };
+    const blank = { id: 'cl-' + Date.now(), name: 'New Checklist', assignTo: 'driver', assigned: [], requirePhotos: true, requireSignoff: false, tripType: 'na', items: [] };
     templates = [blank];
     activeId = blank.id;
   }
@@ -787,7 +806,7 @@ function renderSidebar() {
          style="${isActive ? 'border-color:#93c5fd; background:#eff6ff;' : ''}"
          onclick="selectTemplate('${t.id}')">
       <p class="text-sm font-medium text-slate-800 truncate">${t.name}</p>
-      <p class="text-xs text-slate-400 mt-0.5">${t.items.length} items · ${t.assignTo==='driver' ? 'By driver' : 'By vehicle'}</p>
+      <p class="text-xs text-slate-400 mt-0.5">${t.items.length} items · ${t.assignTo==='driver' ? 'By driver' : 'By vehicle'}${t.requireSignoff ? ' · Sign-off required' : ''}</p>
     </div>`;
   }).join('');
 }
@@ -805,6 +824,7 @@ function selectTemplate(id) {
   const searchEl = document.getElementById('assignSearch');
   if (searchEl) searchEl.value = '';
   switchSet('reqPhotos', t.requirePhotos !== false);
+  switchSet('reqSignoff', t.requireSignoff === true);
   setTripType(t.tripType || 'na');
   updateAssignButtons();
   renderAssignList();
@@ -1341,7 +1361,8 @@ function duplicateChecklist() {
 
 function newChecklist() {
   const t = {
-    id:'cl-'+Date.now(), name:'New Checklist', assignTo:'driver', assigned:[], requirePhotos:true,
+    id:'cl-'+Date.now(), name:'New Checklist', assignTo:'driver', assigned:[], requirePhotos:true, requireSignoff:false,
+    tripType:'na',
     items:[
       { id:'bodywork-'+Date.now(), label:'Bodywork check — any damage?', type:'pass_fail', isBodywork:true, photoRequired:false }
     ]
@@ -1385,6 +1406,7 @@ function saveChecklist() {
   t.assignTo = assignType;
   t.assigned = [...selected];
   t.requirePhotos = switchIsOn('reqPhotos');
+  t.requireSignoff = switchIsOn('reqSignoff');
   t.tripType = tripType;
   renderSidebar();
 
@@ -1394,6 +1416,7 @@ function saveChecklist() {
     type: 'ChecklistTemplate',
     id: t.id, name: t.name, assignTo: t.assignTo,
     assigned: t.assigned, requirePhotos: t.requirePhotos,
+    requireSignoff: t.requireSignoff === true,
     tripType: t.tripType || 'na',
     items: t.items, updatedAt: new Date().toISOString()
   };
@@ -1921,6 +1944,7 @@ function saveConflictResolution(entityId, type) {
       type: 'ChecklistTemplate', id: t.id, name: t.name,
       assignTo: t.assignTo, assigned: t.assigned,
       requirePhotos: t.requirePhotos,
+      requireSignoff: t.requireSignoff === true,
       tripType: t.tripType || 'na',
       items: t.items,
       updatedAt: new Date().toISOString()
