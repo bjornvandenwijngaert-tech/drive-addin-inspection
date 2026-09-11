@@ -1980,8 +1980,10 @@ function expandedRow(r) {
   const itemsHtml = items.length > 0
     ? items.map(item => {
         const isPicture = item.type === 'picture_required';
-        const isFail = !isPicture && (item.value === 'fail' || item.value === 'no');
-        const isPass = !isPicture && (item.value === 'pass' || item.value === 'yes');
+        const isChoice = item.type === 'pass_fail' || item.type === 'yes_no';
+        const isText = item.type === 'text';
+        const isFail = isChoice && (item.value === 'fail' || item.value === 'no');
+        const isPass = isChoice && (item.value === 'pass' || item.value === 'yes');
         const colorClass = isFail ? 'item-fail' : isPass ? 'item-pass' : 'item-na';
         const icon = isPicture ? '📷' : isFail ? '✕' : isPass ? '✓' : '—';
         const itemEntries = getItemPhotoEntries(r, item.id, true);
@@ -1992,18 +1994,28 @@ function expandedRow(r) {
                class="flex items-center gap-1 text-xs text-red-500 bg-red-50 border border-red-200 hover:bg-red-100 rounded-lg px-2 py-1 transition-colors mt-1">
                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
                ${itemReady}/${itemTotal} issue photo${itemTotal > 1 ? 's' : ''}
-             </button>`
+              </button>`
           : '';
+        const textResponseHtml = isText
+          ? `<div class="mt-1.5 max-w-full">
+               <p class="text-[10px] font-semibold text-slate-400 uppercase tracking-wide">Response</p>
+               <p data-item-text-response class="text-xs text-slate-600 mt-0.5" style="white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;max-width:100%;">${htmlSafe(item.value || '—')}</p>
+             </div>`
+          : '';
+        const compactValue = isPicture
+          ? (itemTotal ? (itemReady + '/' + itemTotal + ' stored') : '—')
+          : (item.value || '—');
         return `
-          <div class="flex items-start gap-3 py-2 border-b border-slate-100 last:border-0">
+          <div class="flex items-start gap-3 py-2 border-b border-slate-100 last:border-0 min-w-0">
             <span class="${colorClass} font-bold text-sm w-4 shrink-0 mt-0.5">${icon}</span>
             <div class="flex-1 min-w-0">
-              <p class="text-sm text-slate-700">${item.label}</p>
-              ${item.sides && item.sides.length ? `<div class="flex gap-1 flex-wrap mt-1">${item.sides.map(s => `<span style="font-size:11px;font-weight:600;padding:2px 8px;background:#fee2e2;color:#dc2626;border-radius:20px;">${s}</span>`).join('')}</div>` : ''}
-              ${item.note ? `<p class="text-xs text-slate-400 mt-0.5 italic">${item.note}</p>` : ''}
+              <p class="text-sm text-slate-700" style="overflow-wrap:anywhere;word-break:break-word;">${htmlSafe(item.label || '')}</p>
+              ${textResponseHtml}
+              ${item.sides && item.sides.length ? `<div class="flex gap-1 flex-wrap mt-1">${item.sides.map(s => `<span style="font-size:11px;font-weight:600;padding:2px 8px;background:#fee2e2;color:#dc2626;border-radius:20px;">${htmlSafe(s)}</span>`).join('')}</div>` : ''}
+              ${item.note ? `<p class="text-xs text-slate-400 mt-0.5 italic" style="white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;">${htmlSafe(item.note)}</p>` : ''}
               ${itemPhotoBtn}
             </div>
-            <span class="text-xs text-slate-500 shrink-0 ${colorClass}">${isPicture ? (itemTotal ? (itemReady + '/' + itemTotal + ' stored') : '—') : (item.value || '—')}</span>
+            ${isText ? '' : `<span data-item-compact-value class="text-xs text-slate-500 shrink-0 ${colorClass}" style="max-width:35%;text-align:right;white-space:normal;overflow-wrap:anywhere;word-break:break-word;">${htmlSafe(compactValue)}</span>`}
           </div>`;
       }).join('')
     : '<p class="text-xs text-slate-400 py-4 text-center">No items recorded</p>';
@@ -2045,12 +2057,12 @@ function expandedRow(r) {
   return `
     <tr class="row-expanded">
       <td colspan="8" class="px-5 py-5">
-        <div class="grid grid-cols-3 gap-6">
-          <div class="col-span-2">
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 min-w-0">
+          <div class="lg:col-span-2 min-w-0">
             <p class="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-3">Checklist Responses</p>
             <div class="bg-white rounded-xl border border-slate-200 px-4 py-2">${itemsHtml}</div>
           </div>
-          <div>
+          <div class="min-w-0">
             <p class="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-3">Photos (${photoSummary.retrievableCount}/${photoSummary.capturedCount})</p>
             ${photosHtml}
             ${photoStatusHtml}
