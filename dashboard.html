@@ -3223,6 +3223,108 @@ function _pdfPreFetch(submissions) {
   return Promise.all(_pdfBuildSourceList(submissions).map(_pdfFetchImage));
 }
 
+function _pdfItemLines(doc, text, width, fontSize, fontStyle) {
+  doc.setFontSize(fontSize);
+  doc.setFont('helvetica', fontStyle);
+  var lines = doc.splitTextToSize(String(text == null ? '' : text), width);
+  return Array.isArray(lines) ? lines : [lines];
+}
+
+function _pdfEnsureItemSpace(doc, state, needed) {
+  if (state.y + needed <= state.bottom) return;
+  doc.addPage();
+  state.y = state.margin;
+}
+
+function _pdfDrawItemLines(doc, state, lines, x, fontSize, fontStyle, colour, lineHeight) {
+  lines.forEach(function(line) {
+    _pdfEnsureItemSpace(doc, state, lineHeight + 1);
+    doc.setFontSize(fontSize);
+    doc.setFont('helvetica', fontStyle);
+    doc.setTextColor(colour[0], colour[1], colour[2]);
+    doc.text(line, x, state.y + lineHeight - 0.8);
+    state.y += lineHeight;
+  });
+}
+
+function _pdfDrawItemDivider(doc, state) {
+  if (state.y + 3 > state.bottom) {
+    state.y = state.bottom;
+    return;
+  }
+  doc.setDrawColor(226, 232, 240);
+  doc.line(state.margin, state.y, state.W - state.margin, state.y);
+  state.y += 3;
+}
+
+function _pdfDrawChecklistItemText(doc, item, state) {
+  var value = String(item.value == null || item.value === '' ? '—' : item.value);
+  var isChoice = item.type === 'pass_fail' || item.type === 'yes_no';
+  var isPicture = item.type === 'picture_required';
+  var isFail = isChoice && (value === 'fail' || value === 'no');
+  var isPass = isChoice && (value === 'pass' || value === 'yes');
+  var shortValue = isChoice || isPicture;
+  var labelWidth = state.contentW - (shortValue ? 38 : 14);
+  var labelLines = _pdfItemLines(doc, item.label || '', labelWidth, 9, 'normal');
+  var labelHeight = Math.max(8, labelLines.length * 4 + 3);
+
+  _pdfEnsureItemSpace(doc, state, Math.min(labelHeight, 16));
+  var labelStartY = state.y;
+  if (isFail) {
+    doc.setFillColor(255, 245, 245);
+    doc.rect(state.margin, labelStartY - 1, state.contentW, Math.min(labelHeight, state.bottom - labelStartY), 'F');
+  }
+
+  doc.setFontSize(9);
+  doc.setFont('helvetica', 'bold');
+  if (isPass) doc.setTextColor(22, 163, 74);
+  else if (isFail) doc.setTextColor(220, 38, 38);
+  else doc.setTextColor(148, 163, 184);
+  doc.text(isPass ? '✓' : isFail ? '✗' : '—', state.margin + 1, labelStartY + 4);
+
+  if (shortValue) {
+    if (isPass) doc.setTextColor(22, 163, 74);
+    else if (isFail) doc.setTextColor(220, 38, 38);
+    else doc.setTextColor(71, 85, 105);
+    doc.text(isPicture ? 'PHOTO' : value.toUpperCase(), state.W - state.margin, labelStartY + 4, { align: 'right' });
+  }
+
+  state.y = labelStartY;
+  _pdfDrawItemLines(doc, state, labelLines, state.margin + 7, 9, 'normal', [51, 65, 85], 4);
+  state.y = Math.min(state.bottom, state.y + 2);
+
+  if (!shortValue) {
+    _pdfEnsureItemSpace(doc, state, 9);
+    doc.setFontSize(7);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(100, 116, 139);
+    doc.text('RESPONSE', state.margin + 7, state.y + 3);
+    state.y += 5;
+    var valueLines = _pdfItemLines(doc, value, state.contentW - 14, 8, 'normal');
+    _pdfDrawItemLines(doc, state, valueLines, state.margin + 7, 8, 'normal', [30, 41, 59], 3.8);
+    state.y = Math.min(state.bottom, state.y + 2);
+  }
+
+  if (item.note) {
+    _pdfEnsureItemSpace(doc, state, 9);
+    doc.setFontSize(7);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(100, 116, 139);
+    doc.text('NOTE', state.margin + 7, state.y + 3);
+    state.y += 5;
+    var noteLines = _pdfItemLines(doc, item.note, state.contentW - 14, 8, 'italic');
+    _pdfDrawItemLines(doc, state, noteLines, state.margin + 7, 8, 'italic', [100, 116, 139], 3.8);
+    state.y = Math.min(state.bottom, state.y + 2);
+  }
+
+  if (item.sides && item.sides.length) {
+    var sideLines = _pdfItemLines(doc, 'Sides: ' + item.sides.join(', '), state.contentW - 14, 8, 'bold');
+    _pdfDrawItemLines(doc, state, sideLines, state.margin + 7, 8, 'bold', [220, 38, 38], 3.8);
+    state.y = Math.min(state.bottom, state.y + 2);
+  }
+  doc.setTextColor(0, 0, 0);
+}
+
 // ── PDF Export ────────────────────────────────────────────────────────────────
 async function exportSubmissionPDF(responseId) {
   const r = RESPONSES.find(function(x) { return x.id === responseId; });
@@ -3407,58 +3509,9 @@ async function exportSubmissionPDF(responseId) {
     const items = r.items || [];
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
-      checkNewPage(14);
-      const isFail = item.value === 'fail' || item.value === 'no';
-      const isPass = item.value === 'pass' || item.value === 'yes';
-
-      // Row background for failed items
-      if (isFail) {
-        doc.setFillColor(255, 245, 245);
-        doc.rect(margin, y - 1, contentW, 10, 'F');
-      }
-
-      // Icon
-      doc.setFontSize(9);
-      doc.setFont('helvetica', 'bold');
-      if (isPass) doc.setTextColor(22, 163, 74);
-      else if (isFail) doc.setTextColor(220, 38, 38);
-      else doc.setTextColor(148, 163, 184);
-      doc.text(isPass ? '✓' : isFail ? '✗' : '—', margin + 1, y + 5);
-
-      // Label
-      doc.setFont('helvetica', 'normal');
-      doc.setTextColor(51, 65, 85);
-      doc.text(item.label || '', margin + 7, y + 5, { maxWidth: contentW - 30 });
-
-      // Value
-      doc.setFont('helvetica', 'bold');
-      if (isPass) doc.setTextColor(22, 163, 74);
-      else if (isFail) doc.setTextColor(220, 38, 38);
-      doc.text((item.value || '—').toUpperCase(), W - margin, y + 5, { align: 'right' });
-      doc.setTextColor(0, 0, 0);
-      y += 10;
-
-      // Note
-      if (item.note) {
-        checkNewPage(8);
-        doc.setFontSize(8);
-        doc.setFont('helvetica', 'italic');
-        doc.setTextColor(100, 116, 139);
-        doc.text('Note: ' + item.note, margin + 7, y + 4, { maxWidth: contentW - 14 });
-        y += 7;
-        doc.setTextColor(0, 0, 0);
-      }
-
-      // Sides affected
-      if (item.sides && item.sides.length) {
-        checkNewPage(8);
-        doc.setFontSize(8);
-        doc.setFont('helvetica', 'bold');
-        doc.setTextColor(220, 38, 38);
-        doc.text('Sides: ' + item.sides.join(', '), margin + 7, y + 4, { maxWidth: contentW - 14 });
-        y += 7;
-        doc.setTextColor(0, 0, 0);
-      }
+      var itemTextState = { y: y, margin: margin, W: W, contentW: contentW, bottom: 280 };
+      _pdfDrawChecklistItemText(doc, item, itemTextState);
+      y = itemTextState.y;
 
       // Item photos
       var itemSources = (pdfSources.items && pdfSources.items[item.id]) ? pdfSources.items[item.id] : [];
@@ -3479,10 +3532,9 @@ async function exportSubmissionPDF(responseId) {
         y += maxH + 4;
       }
 
-      // Divider
-      doc.setDrawColor(226, 232, 240);
-      doc.line(margin, y, W - margin, y);
-      y += 3;
+      itemTextState.y = y;
+      _pdfDrawItemDivider(doc, itemTextState);
+      y = itemTextState.y;
     }
 
     if (r.signoff) {
@@ -3645,7 +3697,9 @@ async function runExportAll() {
 
       // Failed items sub-rows
       if (isFail) {
-        var failedItems = (r.items||[]).filter(function(i){return i.value==='fail'||i.value==='no';});
+        var failedItems = (r.items||[]).filter(function(i) {
+          return (i.type === 'pass_fail' || i.type === 'yes_no') && (i.value === 'fail' || i.value === 'no');
+        });
         failedItems.forEach(function(item) {
           if (y > 272) { doc.addPage(); y = margin; }
           doc.setFontSize(7); doc.setTextColor(185,28,28);
@@ -3781,24 +3835,10 @@ async function addSubmissionPages(doc, r, num, total) {
   var items = r.items || [];
   for (var j = 0; j < items.length; j++) {
     var item = items[j];
-    checkNewPage(14);
-    var isFail = item.value==='fail'||item.value==='no';
-    var isPass = item.value==='pass'||item.value==='yes';
-    if (isFail) { doc.setFillColor(255,245,245); doc.rect(margin,y-1,contentW,10,'F'); }
-    doc.setFontSize(9); doc.setFont('helvetica','bold');
-    if (isPass) doc.setTextColor(22,163,74); else if(isFail) doc.setTextColor(220,38,38); else doc.setTextColor(148,163,184);
-    doc.text(isPass?'✓':isFail?'✗':'—', margin+1, y+5);
-    doc.setFont('helvetica','normal'); doc.setTextColor(51,65,85);
-    doc.text(item.label||'', margin+7, y+5, {maxWidth:contentW-30});
-    doc.setFont('helvetica','bold');
-    if(isPass) doc.setTextColor(22,163,74); else if(isFail) doc.setTextColor(220,38,38);
-    doc.text((item.value||'—').toUpperCase(), W-margin, y+5, {align:'right'});
-    doc.setTextColor(0,0,0); y += 10;
-    if (item.note) {
-      checkNewPage(8); doc.setFontSize(8); doc.setFont('helvetica','italic'); doc.setTextColor(100,116,139);
-      doc.text('Note: '+item.note, margin+7, y+4, {maxWidth:contentW-14}); y += 7; doc.setTextColor(0,0,0);
-    }
-    doc.setDrawColor(226,232,240); doc.line(margin,y,W-margin,y); y += 3;
+    var itemTextState = { y: y, margin: margin, W: W, contentW: contentW, bottom: 280 };
+    _pdfDrawChecklistItemText(doc, item, itemTextState);
+    _pdfDrawItemDivider(doc, itemTextState);
+    y = itemTextState.y;
   }
 }
 
