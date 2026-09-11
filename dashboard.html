@@ -3017,7 +3017,7 @@ async function retryDriveArchive(responseId, button) {
         : (entry.kind === 'signoff'
             ? ('checkin_' + response.id + '_operational_signoff.jpg').toLowerCase()
             : 'photo_' + ({ front: 1, left: 2, right: 3, rear: 4 }[entry.slot] || ((entry.index || 0) + 1)) + '.jpg');
-      
+
       var archiveKey = response.id + ':' + entry.key;
       var driveFileId = await dashArchiveFindFile(token, archiveKey, folderId);
       if (!driveFileId) {
