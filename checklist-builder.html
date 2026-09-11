@@ -157,7 +157,7 @@
   <!-- Editor -->
   <main class="flex-1 overflow-y-auto p-6 space-y-5" style="background:#eef2f7;">
     <div class="flex items-start justify-between gap-4">
-      <input id="clName" type="text" placeholder="Checklist name…"
+      <input id="clName" type="text" placeholder="Checklist name…" maxlength="200"
         class="text-2xl font-bold text-slate-800 bg-transparent border-b-2 border-transparent focus:border-blue-500 focus:outline-none flex-1 pb-0.5 placeholder:text-slate-300"
         oninput="renderApiPreview()">
       <div class="flex gap-2 pt-1">
@@ -290,7 +290,7 @@
       <div>
         <p class="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-2">Custom Item</p>
         <div class="flex gap-2">
-          <input id="customLabel" type="text" placeholder="Enter custom item label…"
+          <input id="customLabel" type="text" placeholder="Enter custom item label…" maxlength="500"
                  class="flex-1 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-400"
                  onkeydown="if(event.key==='Enter') addSelectedItems()">
           <select id="customType" class="border border-slate-200 rounded-lg px-2 py-2 text-sm focus:outline-none focus:border-blue-400 bg-white">
@@ -1034,7 +1034,7 @@ function renderItems() {
         <svg width="10" height="16" viewBox="0 0 10 16" fill="currentColor"><circle cx="2.5" cy="2.5" r="1.6"/><circle cx="7.5" cy="2.5" r="1.6"/><circle cx="2.5" cy="8" r="1.6"/><circle cx="7.5" cy="8" r="1.6"/><circle cx="2.5" cy="13.5" r="1.6"/><circle cx="7.5" cy="13.5" r="1.6"/></svg>
       </span>
       <span class="text-slate-300 text-xs select-none font-mono w-5 text-center">${idx+1}</span>
-      <input type="text" value="${escHtml(item.label)}" placeholder="Item label…"
+      <input type="text" value="${escHtml(item.label)}" placeholder="Item label…" maxlength="500"
              class="flex-1 text-sm text-slate-700 bg-transparent focus:outline-none min-w-0"
              oninput="updateLabel('${item.id}', this.value)">
       ${saveBtn}
@@ -1118,7 +1118,7 @@ function removeItem(id) {
   renderApiPreview();
 }
 
-function updateLabel(id, val) { getActive().items.find(i=>i.id===id).label = val; renderApiPreview(); }
+function updateLabel(id, val) { getActive().items.find(i=>i.id===id).label = String(val || '').slice(0, 500); renderApiPreview(); }
 
 // Re-renders the row: switching to/from picture_required shows or hides the photo toggle
 function updateType(id, val)  { getActive().items.find(i=>i.id===id).type = val; renderItems(); renderApiPreview(); }
@@ -1305,7 +1305,7 @@ function addSelectedItems() {
   });
 
   // Add custom item if filled in
-  const customLabel = document.getElementById('customLabel').value.trim();
+  const customLabel = document.getElementById('customLabel').value.trim().slice(0, 500);
   if (customLabel) {
     const customType = document.getElementById('customType').value;
     t.items.push({ id: 'i' + Date.now(), label: customLabel, type: customType, photoRequired: false });
@@ -1355,6 +1355,10 @@ function removeFromLibrary(label) {
 function persistLibrary(msg) {
   if (!_api) { toast(msg + ' (local only — not connected)'); return; }
   const payload = { type: 'CustomItemLibrary', items: LIBRARY.items, favourites: LIBRARY.favourites || [], updatedAt: new Date().toISOString() };
+  if (JSON.stringify(payload).length > 9500) {
+    toast('Custom checks are too large to save. Remove or shorten an item.');
+    return;
+  }
   function onErr(err) { console.error('Library save failed', err); toast('Library save failed'); }
   if (LIBRARY.addInDataId) {
     _api.call('Set', { typeName: 'AddInData', entity: { id: LIBRARY.addInDataId, addInId: ADDIN_ID, details: payload } },
@@ -1411,7 +1415,7 @@ function deleteChecklist() {
 
 function saveChecklist() {
   const t = getActive();
-  const newName = document.getElementById('clName').value.trim() || 'Untitled';
+  const newName = document.getElementById('clName').value.trim().slice(0, 200) || 'Untitled';
 
   // Duplicate name check — ignore the current template itself
   const duplicate = templates.find(function(other) {
@@ -1442,6 +1446,10 @@ function saveChecklist() {
     tripType: t.tripType || 'na',
     items: t.items, updatedAt: new Date().toISOString()
   };
+  if (JSON.stringify(payload).length > 9500) {
+    toast('Checklist template is too large. Shorten item labels before saving.');
+    return;
+  }
 
   function onSaveErr(err) {
     const msg = err && (err.message || (typeof err === 'string' ? err : JSON.stringify(err)));

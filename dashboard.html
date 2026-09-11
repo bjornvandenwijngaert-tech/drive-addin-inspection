@@ -9,6 +9,7 @@
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://bjornvandenwijngaert-tech.github.io/drive-addin-inspection/response-storage.js"></script>
 <style>
   body { font-family: 'Segoe UI', system-ui, sans-serif; }
   .geotab-header { background: #0047BB; }
@@ -884,12 +885,24 @@ function applyAddInData(results) {
   RESPONSES = [];
   ISSUE_RECORDS = [];
   var cfg = null;
+  var responseRoots = [];
+  var responseParts = [];
   results.forEach(function(r) {
     var d = r.details;
     if (!d) return;
-    if (d.type === 'ChecklistResponse')      { d._addInDataId = r.id; RESPONSES.push(d); }
+    if (d.type === 'ChecklistResponse')      { d._addInDataId = r.id; responseRoots.push(d); }
+    else if (d.type === 'ChecklistResponsePart') { d._addInDataId = r.id; responseParts.push(d); }
     else if (d.type === 'IssueStatus')       { ISSUE_RECORDS.push(d); }
     else if (d.type === 'GoogleDriveConfig' && !cfg) { cfg = d; }
+  });
+  responseRoots.forEach(function(root) {
+    if (!root.multipartStatus) {
+      RESPONSES.push(root);
+      return;
+    }
+    var assembled = ChecklistResponseStorage.reassemble(root, responseParts);
+    if (assembled.complete) RESPONSES.push(assembled.response);
+    else console.warn('[Response storage] Hidden incomplete submission ' + root.id + ': ' + assembled.reason);
   });
   RESPONSES.sort(function(a, b) { return new Date(b.submittedAt) - new Date(a.submittedAt); });
   _gdConfig = cfg;
@@ -2180,8 +2193,9 @@ function purgeOldRecords() {
   var hasV2Media = old.some(function(r) {
     return r.photoStorageVersion === 2 && Array.isArray(r.photoManifest) && r.photoManifest.length;
   });
-  if (hasV2Media) {
-    alert('Bulk purge is disabled for MediaFile v2 records until archive and cleanup checks are complete. Use single-record delete instead.');
+  var hasMultipart = old.some(function(r) { return !!r.multipartStatus; });
+  if (hasV2Media || hasMultipart) {
+    alert('Bulk purge is disabled for multipart or MediaFile v2 records until cleanup checks are complete. Use single-record delete instead.');
     return;
   }
   if (old.length === 0) return;
@@ -2191,8 +2205,11 @@ function purgeOldRecords() {
   var toRemove = old.filter(function(r) { return r._addInDataId; });
   if (toRemove.length === 0) { alert('No records with a valid ID to remove.'); return; }
 
-  var calls = toRemove.map(function(r) {
-    return ['Remove', { typeName: 'AddInData', entity: { id: r._addInDataId } }];
+  var calls = [];
+  toRemove.forEach(function(r) {
+    [r._addInDataId].concat(r._partAddInDataIds || []).forEach(function(id) {
+      calls.push(['Remove', { typeName: 'AddInData', entity: { id: id } }]);
+    });
   });
 
   _api.multiCall(calls, function() {
@@ -2255,7 +2272,7 @@ function executeDeleteSubmission(responseId) {
   var r = RESPONSES.find(function(x) { return x.id === responseId; });
   if (!r || !r._addInDataId) { console.warn('No AddInData ID for', responseId); return; }
 
-  var entries = getDisplayPhotoEntries(r, true).filter(function(e) { return e.state === 'ready' && !!e.fileId; });
+  var entries = getDisplayPhotoEntries(r, true).filter(function(e) { return !!e.fileId; });
   var seenDrive = {};
   var seenMedia = {};
   var driveIds = [];
@@ -2370,19 +2387,26 @@ function executeDeleteSubmission(responseId) {
       }
 
       fetchIssueRecordIds(function(issueRecordIds) {
-        var removeIds = [r._addInDataId].concat(issueRecordIds);
-        removeAddInDataRecords(removeIds, function(recordErrors) {
-          if (recordErrors.length) {
-            console.error('Record cleanup failed', recordErrors);
-            alert('Photos were deleted but record cleanup was incomplete.\n\n' + recordErrors.slice(0, 4).join('\n'));
+        var childIds = (r._partAddInDataIds || []).concat(issueRecordIds);
+        removeAddInDataRecords(childIds, function(childErrors) {
+          if (childErrors.length) {
+            console.error('Child record cleanup failed; root retained', childErrors);
+            alert('Photos were deleted but part cleanup was incomplete. The submission root was retained for recovery.\n\n' + childErrors.slice(0, 4).join('\n'));
             return;
           }
+          removeAddInDataRecords([r._addInDataId], function(rootErrors) {
+            if (rootErrors.length) {
+              console.error('Root record cleanup failed', rootErrors);
+              alert('Photos and child records were deleted, but the submission root remains.\n\n' + rootErrors.slice(0, 4).join('\n'));
+              return;
+            }
 
-          RESPONSES = RESPONSES.filter(function(x) { return x.id !== responseId; });
-          ISSUE_RECORDS = ISSUE_RECORDS.filter(function(i) { return i.submissionId !== responseId; });
-          expandedId = null;
-          buildFilterOptions();
-          applyFilters();
+            RESPONSES = RESPONSES.filter(function(x) { return x.id !== responseId; });
+            ISSUE_RECORDS = ISSUE_RECORDS.filter(function(i) { return i.submissionId !== responseId; });
+            expandedId = null;
+            buildFilterOptions();
+            applyFilters();
+          });
         });
       });
     });
@@ -2841,6 +2865,17 @@ function dashArchiveUpdateStatus(response) {
     ? 'complete' : 'pending';
 }
 
+function replaceResponseStorageRoot(responseId, verifiedDetails) {
+  var index = RESPONSES.findIndex(function(item) { return item.id === responseId; });
+  if (index < 0) return;
+  var current = RESPONSES[index];
+  if (verifiedDetails.multipartStatus) {
+    verifiedDetails.items = current.items || [];
+    verifiedDetails._partAddInDataIds = current._partAddInDataIds || [];
+  }
+  RESPONSES[index] = verifiedDetails;
+}
+
 function dashArchiveMergeDriveId(addInDataId, responseId, sourceEntry, driveFileId, attempt) {
   attempt = attempt || 0;
   return dashArchiveGetResponse(addInDataId).then(function(record) {
@@ -2874,8 +2909,7 @@ function dashArchiveMergeDriveId(addInDataId, responseId, sourceEntry, driveFile
             return;
           }
           verifiedDetails._addInDataId = verifiedRecord.id;
-          var index = RESPONSES.findIndex(function(item) { return item.id === responseId; });
-          if (index >= 0) RESPONSES[index] = verifiedDetails;
+          replaceResponseStorageRoot(responseId, verifiedDetails);
           resolve(verifiedDetails);
         }, reject);
       }, reject);
@@ -2916,8 +2950,7 @@ function dashArchiveMergeSignoffDriveId(addInDataId, responseId, driveFileId, at
             return;
           }
           verifiedDetails._addInDataId = verifiedRecord.id;
-          var index = RESPONSES.findIndex(function(item) { return item.id === responseId; });
-          if (index >= 0) RESPONSES[index] = verifiedDetails;
+          replaceResponseStorageRoot(responseId, verifiedDetails);
           resolve(verifiedDetails);
         }, reject);
       }, reject);
@@ -3701,15 +3734,24 @@ async function addSubmissionPages(doc, r, num, total) {
   doc.text(r.templateName||'—', margin, y+4); doc.text(r.id, col2, y+4); y += 12;
 
   // Vehicle photos
-  if (r.gdFileIds && r.gdFileIds.length) {
+  var vehicleDriveEntries = getResponsePhotoEntries(r, false)
+    .map(function(entry) {
+      return {
+        kind: entry.kind,
+        label: entry.label,
+        fileId: entry.gdFileId || (entry.storage === 'drive' ? entry.fileId : '')
+      };
+    })
+    .filter(function(entry) { return entry.kind === 'walkaround' && !!entry.fileId; });
+  if (vehicleDriveEntries.length) {
     sectionTitle('Vehicle Photos');
     const slotLabels = ['Front','Left','Right','Rear'];
     const imgColW = (contentW - 6) / 2;
     const remainingPage = 275 - y;
     const maxImgH = Math.min(97, (remainingPage - 20) / 2);
     const rowHeights = [0,0];
-    for (var i = 0; i < Math.min(r.gdFileIds.length, 4); i++) {
-      const url = 'https://www.googleapis.com/drive/v3/files/' + r.gdFileIds[i] + '?alt=media';
+    for (var i = 0; i < Math.min(vehicleDriveEntries.length, 4); i++) {
+      const url = 'https://www.googleapis.com/drive/v3/files/' + vehicleDriveEntries[i].fileId + '?alt=media';
       const dataUrl = await (async function(u) {
         try {
           const resp = await fetch(u, _gdConfig ? {headers:{'Authorization':'Bearer '+_gdConfig.accessToken}} : {});
@@ -3726,7 +3768,7 @@ async function addSubmissionPages(doc, r, num, total) {
         doc.addImage(dataUrl,'JPEG',x,imgY,w,h);
         rowHeights[row] = Math.max(rowHeights[row], h);
         doc.setFontSize(8); doc.setFont('helvetica','bold'); doc.setTextColor(71,85,105);
-        doc.text(slotLabels[i], x, imgY+h+4);
+        doc.text(vehicleDriveEntries[i].label || slotLabels[i], x, imgY+h+4);
       }
     }
     y += rowHeights[0] + (rowHeights[1]>0?rowHeights[1]+10:0) + 10;
@@ -4422,8 +4464,7 @@ function markOneDriveArchiveDeleted(responseId, deletedIds, attempt) {
     return new Promise(function(resolve, reject) {
       _api.call('Set', { typeName: 'AddInData', entity: record }, function() {
         details._addInDataId = record.id;
-        var index = RESPONSES.findIndex(function(item) { return item.id === responseId; });
-        if (index >= 0) RESPONSES[index] = details;
+        replaceResponseStorageRoot(responseId, details);
         resolve();
       }, reject);
     });
@@ -4838,8 +4879,11 @@ function renderIssueCard(issue) {
     + (issue.itemSides && issue.itemSides.length ? '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px;">' + issue.itemSides.map(function(s){ return '<span style="font-size:11px;font-weight:600;padding:2px 8px;background:#fee2e2;color:#dc2626;border-radius:20px;">' + s + '</span>'; }).join('') + '</div>' : '')
     + (issue.itemNote ? '<p style="font-size:13px;color:#64748b;margin:0;font-style:italic;">' + issue.itemNote + '</p>' : '')
     + (function() {
-        var issuePhotoCount = (issue.gdItemPhotoIds ? issue.gdItemPhotoIds.length : 0)
-          + (issue.itemMediaFileIds ? issue.itemMediaFileIds.length : 0);
+        var response = RESPONSES.find(function(item) { return item.id === issue.submissionId; });
+        var issuePhotoCount = response
+          ? getItemPhotoEntries(response, issue.itemId, false).length
+          : ((issue.gdItemPhotoIds ? issue.gdItemPhotoIds.length : 0)
+            + (issue.itemMediaFileIds ? issue.itemMediaFileIds.length : 0));
         if (!issuePhotoCount) return '';
         return '<button onclick="openItemPhotoPopoverById(\'' + issue.submissionId + '\',\'' + issue.itemId + '\')" style="margin-top:8px;font-size:12px;color:#dc2626;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:4px 10px;cursor:pointer;">📷 ' + issuePhotoCount + ' photo' + (issuePhotoCount>1?'s':'') + '</button>';
       })()
