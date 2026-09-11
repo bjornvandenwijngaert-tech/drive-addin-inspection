@@ -404,6 +404,16 @@ const BUILD      = '2026-08-17d';
 const ERR_ID = 'diagErr-' + PAGE;
 let _focused = false;
 let _errCount = 0;
+let _disposed = false;
+let _loadGeneration = 0;
+
+function beginLoadGeneration() {
+  return ++_loadGeneration;
+}
+
+function loadGenerationIsCurrent(generation) {
+  return !_disposed && _focused && generation === _loadGeneration;
+}
 
 // ── Re-entry teardown ─────────────────────────────────────────────────────────
 // MyGeotab re-injects and re-runs this entire script every time the page is
@@ -434,7 +444,9 @@ function onWin(type, fn, opts) {
 
 window[INSTANCE_KEY] = {
   dispose: function() {
+    _disposed = true;
     _focused = false;
+    _loadGeneration++;
     _disposers.splice(0).forEach(function(off) { try { off(); } catch (e) {} });
     const stale = document.getElementById(ERR_ID);
     if (stale) stale.remove();
@@ -595,7 +607,10 @@ geotab.addin.vehicleChecklistBuilder = function() {
       boot(api, false);           // refetch only if what we hold has gone stale
     }),
     blur: lifecycleGuard('blur', function() {
-      _focused = false; logNote('blur');
+      _focused = false;
+      _loadGeneration++;
+      _booting = false;
+      logNote('blur — pending API callbacks cancelled');
     })
   };
 };
@@ -608,6 +623,7 @@ const BOOT_STALE_MS = 30000;
 function boot(api, force) {
   if (api) { _api = api; }
   if (!_api) return;
+  _disposed = false;
   hideBridgeWait();
   if (_booting) return;
   if (!force && _lastLoadedAt && Date.now() - _lastLoadedAt < BOOT_STALE_MS) {
@@ -620,6 +636,7 @@ function boot(api, force) {
 
 function loadFromApi() {
   if (!_api) return;
+  const generation = beginLoadGeneration();
   document.getElementById('dataSourceBadge').classList.remove('hidden');
 
   // Load checklist templates from AddInData
@@ -627,12 +644,14 @@ function loadFromApi() {
     typeName: 'AddInData',
     search: { addInId: ADDIN_ID }
   }, function(results) {
+    if (!loadGenerationIsCurrent(generation)) return;
     applyAddInData(results || []);
     _lastLoadedAt = Date.now();
     _booting = false;
     document.getElementById('dataSourceBadge').classList.add('hidden');
     logNote('fetch ok — ' + (results || []).length + ' AddInData record(s), ' + templates.length + ' template(s)');
   }, function(err) {
+    if (!loadGenerationIsCurrent(generation)) return;
     console.error('AddInData fetch failed', err);
     _booting = false;
     document.getElementById('dataSourceBadge').classList.add('hidden');
@@ -641,6 +660,7 @@ function loadFromApi() {
 
   // Load real drivers
   _api.call('Get', { typeName: 'User', search: { isDriver: true } }, function(users) {
+    if (!loadGenerationIsCurrent(generation)) return;
     if (users && users.length) {
       DRIVERS = users.map(u => ({
         id: u.id,
@@ -654,6 +674,7 @@ function loadFromApi() {
 
   // Load real vehicles/devices
   _api.call('Get', { typeName: 'Device', search: {} }, function(devices) {
+    if (!loadGenerationIsCurrent(generation)) return;
     if (devices && devices.length) {
       VEHICLES = devices
         .filter(d => d.id && d.id !== 'b0')
@@ -671,6 +692,7 @@ function loadFromApi() {
 
   // Load groups (for filter chips)
   _api.call('Get', { typeName: 'Group', search: {} }, function(groups) {
+    if (!loadGenerationIsCurrent(generation)) return;
     if (groups && groups.length) {
       groups.forEach(g => { GROUP_MAP[g.id] = g.name || g.id; });
       buildDriverGroups();
